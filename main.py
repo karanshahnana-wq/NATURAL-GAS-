@@ -1,67 +1,29 @@
 from datetime import datetime, timezone
 from pathlib import Path
-import os, random, math
+import os, math
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 
-ROOT = Path(__file__).parent
-app = FastAPI(title="MCX Natural Gas Radar", version="0.1.0")
-app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
-
+app = FastAPI(title="MCX Natural Gas Radar", version="0.1.1")
 DEMO_MODE = os.getenv("RADAR_DEMO_MODE", "true").lower() == "true"
 
-def demo_snapshot():
-    # Clearly synthetic data for UI development only. Never use as a trading signal.
-    now = datetime.now(timezone.utc).isoformat()
-    close = 263.70
-    price = round(close + math.sin(datetime.now().minute / 8) * 1.8 - 0.4, 2)
-    change = round(price - close, 2)
-    pct = round(change / close * 100, 2)
-    return {
-        "mode": "DEMO — SYNTHETIC DATA" if DEMO_MODE else "LIVE ADAPTER NOT CONFIGURED",
-        "timestamp_utc": now,
-        "contract": "MCX Natural Gas Futures (demo placeholder — select active expiry)",
-        "price": price, "previous_close": close, "change": change, "change_pct": pct,
-        "day_high": round(max(price + 1.1, 265.1), 2),
-        "day_low": round(min(price - 1.0, 261.9), 2),
-        "volume": 18420, "open_interest": 44558, "oi_change": 3269,
-        "vwap": round(price - 0.35, 2),
-        "levels": {"support_1": 260.0, "support_2": 257.5, "resistance_1": 265.0, "resistance_2": 268.0},
-        "signals": {
-            "daily_bias": "WAIT FOR LIVE DATA",
-            "intraday_setup": "No trade — demo mode",
-            "overnight_gap": "Not forecast — historical validation required",
-            "confidence": None,
-            "reason": "These figures are synthetic placeholders used to build the interface. They are not current MCX prices or recommendations."
-        },
-        "inputs": {
-            "mcx_price": "Synthetic placeholder",
-            "henry_hub": "Not connected",
-            "usd_inr": "Not connected",
-            "weather": "Not connected",
-            "eia_storage": "Not connected",
-            "news": "Not connected"
-        }
-    }
+PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCX Natural Gas Radar</title><style>
+:root{color-scheme:dark;--bg:#0a1020;--p:#111b2e;--line:#263650;--t:#e8eef8;--m:#9cacc4;--a:#7dd3fc;--g:#34d399;--r:#fb7185;--y:#fbbf24}*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top right,#172b49,#0a1020 48%);color:var(--t);font:15px/1.5 system-ui,Segoe UI,sans-serif}.top{padding:24px max(20px,calc((100vw - 1200px)/2));border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:16px}.eyebrow{font-size:11px;letter-spacing:1.5px;color:var(--a);font-weight:800}h1{font-size:clamp(25px,4vw,38px);margin:5px 0;letter-spacing:-1px}h2{font-size:19px;margin:0 0 12px}p{color:var(--m)}.muted{color:var(--m);font-size:13px}.pill{border:1px solid var(--y);color:var(--y);padding:6px 10px;border-radius:99px;font-size:11px;font-weight:800}button{background:var(--a);color:#07111f;border:0;border-radius:9px;padding:10px 14px;font-weight:800;cursor:pointer}.actions{display:flex;align-items:center;gap:10px}main{max-width:1200px;margin:auto;padding:20px}.notice{background:#2a2110;border:1px solid #8a6720;color:#f9e6b0;padding:12px 15px;border-radius:12px;margin-bottom:16px}.grid{display:grid;grid-template-columns:1.1fr 1fr;gap:15px}.panel{background:linear-gradient(145deg,#111b2e,#0d1729);border:1px solid var(--line);border-radius:16px;padding:20px;min-width:0}.label{font-size:11px;letter-spacing:1.3px;color:var(--a);font-weight:800}.price{font-size:clamp(38px,6vw,58px);font-weight:850;letter-spacing:-2px;margin:8px 0}.change{font-weight:800}.positive{color:var(--g)}.negative{color:var(--r)}.mini{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:20px}.mini div{background:#0a1425;border:1px solid var(--line);border-radius:9px;padding:10px}.mini span{display:block;color:var(--m);font-size:12px}.mini b{display:block;margin-top:5px}.range{height:5px;background:linear-gradient(90deg,var(--r),#64748b,var(--g));border-radius:5px;margin:24px 0 8px;position:relative}.range i{position:absolute;left:50%;top:-4px;width:13px;height:13px;border:3px solid var(--a);background:white;border-radius:50%}.range-labels{display:flex;justify-content:space-between;color:var(--m);font-size:12px}.three{display:grid;grid-template-columns:repeat(3,1fr);gap:15px;margin:15px 0}.value{font-size:18px;font-weight:800;margin:12px 0}.three p{min-height:45px}.foot{border-top:1px solid var(--line);padding-top:10px;color:var(--a);font-size:12px}.levels div,.inputs div{display:flex;justify-content:space-between;gap:10px;padding:11px 0;border-bottom:1px solid var(--line)}.levels div:last-child,.inputs div:last-child{border:0}.levels span,.inputs span{color:var(--m);font-size:12px}.current{background:#18304a;padding-left:8px!important;padding-right:8px!important;border-radius:8px}.roadmap{margin-top:15px}.roadmap li{padding:5px 0 10px}.roadmap li span{display:block;color:var(--m);font-size:13px}footer{text-align:center;color:var(--m);font-size:12px;padding:22px}@media(max-width:760px){.top{align-items:flex-start;flex-direction:column;padding:20px}.actions{width:100%;justify-content:space-between}main{padding:12px}.grid,.three{grid-template-columns:1fr}.mini{grid-template-columns:repeat(2,1fr)}.panel{padding:16px}.three p{min-height:0}}
+</style></head><body><header class="top"><div><div class="eyebrow">MARKET INTELLIGENCE WORKSPACE</div><h1>MCX Natural Gas Radar</h1><p style="margin:0">Daily direction · Intraday plan · Overnight gap research</p></div><div class="actions"><span id="mode" class="pill">LOADING</span><button onclick="loadData()">Refresh</button></div></header><main><div class="notice"><b>Research build v0.1.1:</b> figures are synthetic placeholders, not live MCX prices or trading advice. Kotak connection and historical validation are not yet configured.</div><section class="grid"><article class="panel"><div class="label">Natural Gas futures · demo placeholder</div><div class="price" id="price">—</div><div><span id="change" class="change">—</span> <span class="muted">· Previous close </span><b id="prev">—</b></div><div class="muted" style="margin-top:6px">Updated <span id="updated">—</span></div><div class="range"><i id="dot"></i></div><div class="range-labels"><span>Low <b id="low">—</b></span><span>High <b id="high">—</b></span></div><div class="mini"><div><span>VWAP</span><b id="vwap">—</b></div><div><span>Volume</span><b id="volume">—</b></div><div><span>Open interest</span><b id="oi">—</b></div><div><span>OI change</span><b id="oichange">—</b></div></div></article><article class="panel"><div class="label">DAILY DIRECTION ENGINE</div><div class="value" id="bias">WAIT FOR LIVE DATA</div><p id="reason">Loading snapshot…</p><h2 style="margin-top:22px">Price levels</h2><div class="levels"><div><span>Resistance 2</span><b id="r2">—</b></div><div><span>Resistance 1</span><b id="r1">—</b></div><div class="current"><span>Current demo price</span><b id="lp">—</b></div><div><span>Support 1</span><b id="s1">—</b></div><div><span>Support 2</span><b id="s2">—</b></div></div></article></section><h2 style="margin-top:25px">Three separate decisions</h2><section class="three"><article class="panel"><div class="label">01 · DAILY DIRECTION</div><div class="value" id="daily">Waiting for validated data</div><p>Trend, volatility, levels, global gas move and scheduled catalysts.</p><div class="foot">Bullish / bearish / neutral + invalidation</div></article><article class="panel"><div class="label">02 · INTRADAY ENTRY / EXIT</div><div class="value" id="intra">No trade in demo mode</div><p>Trigger, stop, targets and no-trade conditions before entry.</p><div class="foot">Setup + risk levels</div></article><article class="panel"><div class="label">03 · OVERNIGHT OPENING GAP</div><div class="value" id="overnight">Not forecast yet</div><p>Next MCX open versus prior close, using only information available before open.</p><div class="foot">Gap direction + size range + reversal risk</div></article></section><section class="grid"><article class="panel"><h2>Data connections</h2><div id="inputs" class="inputs"></div></article><article class="panel"><div class="label">BUILD ROADMAP</div><h2>Next modules</h2><ol class="roadmap"><li><b>Kotak Neo MCX live feed</b><span>Verify instrument lookup, quote and WebSocket payload.</span></li><li><b>Historical MCX futures</b><span>Contract expiry, candles, volume and OI from an authorized source.</span></li><li><b>Global drivers</b><span>Henry Hub, USD/INR, weather revisions, EIA storage and timestamped news.</span></li><li><b>Walk-forward validation</b><span>Test against simple baselines after costs; never invent accuracy.</span></li></ol></article></section><footer>MCX Natural Gas Radar · responsive starter · no order placement</footer></main><script>async function loadData(){try{let r=await fetch('/api/snapshot',{cache:'no-store'});if(!r.ok)throw Error('API '+r.status);let d=await r.json(),f=v=>v==null?'—':Number(v).toLocaleString('en-IN',{maximumFractionDigits:2}),$=id=>document.getElementById(id);$('mode').textContent=d.mode;$('price').textContent='₹'+f(d.price);$('prev').textContent='₹'+f(d.previous_close);$('change').textContent=(d.change>=0?'+':'')+'₹'+f(d.change)+' ('+(d.change_pct>=0?'+':'')+f(d.change_pct)+'%)';$('change').className='change '+(d.change>=0?'positive':'negative');$('updated').textContent=new Date(d.timestamp_utc).toLocaleTimeString();$('low').textContent='₹'+f(d.day_low);$('high').textContent='₹'+f(d.day_high);$('vwap').textContent='₹'+f(d.vwap);$('volume').textContent=f(d.volume);$('oi').textContent=f(d.open_interest);$('oichange').textContent=f(d.oi_change);$('bias').textContent=d.signals.daily_bias;$('daily').textContent=d.signals.daily_bias;$('intra').textContent=d.signals.intraday_setup;$('overnight').textContent=d.signals.overnight_gap;$('reason').textContent=d.signals.reason;$('lp').textContent='₹'+f(d.price);for(let k of ['r1','r2','s1','s2'])$(k).textContent='₹'+f(d.levels[{r1:'resistance_1',r2:'resistance_2',s1:'support_1',s2:'support_2'}[k]]);$('inputs').innerHTML=Object.entries(d.inputs).map(([k,v])=>'<div><span>'+k.replaceAll('_',' ')+'</span><b>'+v+'</b></div>').join('');let span=d.day_high-d.day_low;$('dot').style.left=(span>0?Math.max(0,Math.min(100,(d.price-d.day_low)/span*100)):50)+'%'}catch(e){document.getElementById('mode').textContent='API ERROR';document.getElementById('reason').textContent=e.message}}loadData();</script></body></html>"""
+
+def snapshot():
+    # Synthetic UI data only; no live feed is configured.
+    now=datetime.now(timezone.utc).isoformat()
+    close=263.70
+    price=round(close+math.sin(datetime.now().minute/8)*1.8-.4,2)
+    change=round(price-close,2)
+    return {"mode":"DEMO — SYNTHETIC DATA","timestamp_utc":now,"contract":"MCX Natural Gas Futures (demo placeholder)","price":price,"previous_close":close,"change":change,"change_pct":round(change/close*100,2),"day_high":round(max(price+1.1,265.1),2),"day_low":round(min(price-1,261.9),2),"volume":18420,"open_interest":44558,"oi_change":3269,"vwap":round(price-.35,2),"levels":{"support_1":260.0,"support_2":257.5,"resistance_1":265.0,"resistance_2":268.0},"signals":{"daily_bias":"WAIT FOR LIVE DATA","intraday_setup":"No trade — demo mode","overnight_gap":"Not forecast — historical validation required","reason":"Synthetic placeholders only. No live MCX prices, verified signal or forecast."},"inputs":{"mcx_price":"Demo only","kotak_neo":"Not connected","henry_hub":"Not connected","usd_inr":"Not connected","weather":"Not connected","eia_storage":"Not connected","news":"Not connected"}}
 
 @app.get("/", response_class=HTMLResponse)
-def home():
-    return FileResponse(ROOT / "index.html")
-
+def home(): return HTMLResponse(PAGE)
 @app.get("/api/health")
-def health():
-    return {"ok": True, "app": "MCX Natural Gas Radar", "demo_mode": DEMO_MODE, "version": "0.1.0"}
-
+def health(): return {"ok":True,"app":"MCX Natural Gas Radar","demo_mode":True,"version":"0.1.1"}
 @app.get("/api/snapshot")
-def snapshot():
-    return demo_snapshot()
-
+def api_snapshot(): return snapshot()
 @app.get("/api/history/status")
-def history_status():
-    return {
-        "status": "not_connected",
-        "message": "Historical MCX candles are not connected yet. Next build step: ingest an authorized historical source and store contract-aware candles.",
-        "needed": ["timestamp", "expiry", "open", "high", "low", "close", "volume", "open_interest"]
-    }
+def history_status(): return {"status":"not_connected","message":"Historical MCX candles are not connected. Add an authorized historical source before backtesting forecasts.","needed":["timestamp","expiry","open","high","low","close","volume","open_interest"]}
