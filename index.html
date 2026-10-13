@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MCX Natural Gas Radar</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div><div class="eyebrow">MARKET INTELLIGENCE WORKSPACE</div><h1>MCX Natural Gas Radar</h1><p class="sub">Daily direction · Intraday plan · Overnight gap research</p></div>
+  <div class="top-actions"><span id="mode" class="pill warning">LOADING MODE</span><button id="refresh">Refresh</button></div>
+</header>
+<main>
+  <div class="notice"><strong>Research build v0.1</strong> — demo figures are synthetic and are not live prices or trading advice. Live Kotak integration and historical validation are not connected yet.</div>
+  <section class="hero-grid">
+    <article class="panel price-panel">
+      <div class="panel-label">Natural Gas futures · demo placeholder</div>
+      <div class="price-row"><span id="price" class="big-price">—</span><span id="change" class="change">—</span></div>
+      <div class="muted">Previous close <b id="prevclose">—</b> · Updated <span id="updated">—</span></div>
+      <div class="range"><div class="range-line"><span id="low-dot"></span></div><div class="range-labels"><span>Low <b id="low">—</b></span><span>High <b id="high">—</b></span></div></div>
+    </article>
+    <article class="panel bias-panel">
+      <div class="panel-label">Daily directional engine</div><div id="dailyBias" class="bias">WAIT FOR LIVE DATA</div>
+      <p id="reason" class="muted">Loading snapshot…</p><div class="mini-grid"><div><span>VWAP</span><b id="vwap">—</b></div><div><span>Volume</span><b id="volume">—</b></div><div><span>Open interest</span><b id="oi">—</b></div><div><span>OI change</span><b id="oichange">—</b></div></div>
+    </article>
+  </section>
+  <section class="section-head"><div><h2>Three decisions, kept separate</h2><p class="muted">The radar will not combine daily bias, intraday execution and overnight gap into one misleading score.</p></div></section>
+  <section class="three-grid">
+    <article class="panel decision"><div class="number">01</div><h3>Daily direction</h3><div id="dailyCard" class="decision-value">Waiting for validated data</div><p>Trend, volatility, levels, global gas move and scheduled catalysts.</p><div class="foot">Output: bullish / bearish / neutral + invalidation</div></article>
+    <article class="panel decision"><div class="number">02</div><h3>Intraday entry / exit</h3><div id="intraday" class="decision-value">No trade in demo mode</div><p>Trigger, stop, targets and no-trade conditions should be defined before entry.</p><div class="foot">Output: setup + risk levels</div></article>
+    <article class="panel decision"><div class="number">03</div><h3>Overnight opening gap</h3><div id="overnight" class="decision-value">Not forecast yet</div><p>Compare next MCX open with prior close, using only information available before open.</p><div class="foot">Output: gap direction + size range + reversal risk</div></article>
+  </section>
+  <section class="two-grid">
+    <article class="panel"><div class="panel-head"><h2>Price levels</h2><span class="muted">Demo placeholders</span></div><div class="levels">
+      <div><span>Resistance 2</span><b id="r2">—</b></div><div><span>Resistance 1</span><b id="r1">—</b></div><div class="current"><span>Current demo price</span><b id="levelprice">—</b></div><div><span>Support 1</span><b id="s1">—</b></div><div><span>Support 2</span><b id="s2">—</b></div>
+    </div></article>
+    <article class="panel"><div class="panel-head"><h2>Data connections</h2><span class="muted">Connection checklist</span></div><div id="inputs" class="inputs"></div></article>
+  </section>
+  <section class="panel next-panel"><div><div class="eyebrow">BUILD ROADMAP</div><h2>Next modules to add</h2></div><ol><li><b>Kotak Neo MCX live feed</b><span>Confirm instrument lookup, live quote and WebSocket message shape.</span></li><li><b>Historical MCX futures store</b><span>Contract expiry, candles, volume and OI; source must be authorized.</span></li><li><b>Global drivers</b><span>Henry Hub, USD/INR, weather revisions, EIA storage and timestamped news.</span></li><li><b>Walk-forward validation</b><span>Compare against simple baselines after costs; no invented accuracy claims.</span></li></ol></section>
+  <footer>MCX Natural Gas Radar · starter scaffold · no order placement</footer>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
