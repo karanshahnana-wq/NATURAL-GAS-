@@ -3,8 +3,9 @@ from pathlib import Path
 import os, math
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from kotak_connection import connection_status
 
-app = FastAPI(title="MCX Natural Gas Radar", version="0.1.1")
+app = FastAPI(title="MCX Natural Gas Radar", version="0.2.0")
 DEMO_MODE = os.getenv("RADAR_DEMO_MODE", "true").lower() == "true"
 
 PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCX Natural Gas Radar</title><style>
@@ -17,7 +18,8 @@ def snapshot():
     close=263.70
     price=round(close+math.sin(datetime.now().minute/8)*1.8-.4,2)
     change=round(price-close,2)
-    return {"mode":"DEMO — SYNTHETIC DATA","timestamp_utc":now,"contract":"MCX Natural Gas Futures (demo placeholder)","price":price,"previous_close":close,"change":change,"change_pct":round(change/close*100,2),"day_high":round(max(price+1.1,265.1),2),"day_low":round(min(price-1,261.9),2),"volume":18420,"open_interest":44558,"oi_change":3269,"vwap":round(price-.35,2),"levels":{"support_1":260.0,"support_2":257.5,"resistance_1":265.0,"resistance_2":268.0},"signals":{"daily_bias":"WAIT FOR LIVE DATA","intraday_setup":"No trade — demo mode","overnight_gap":"Not forecast — historical validation required","reason":"Synthetic placeholders only. No live MCX prices, verified signal or forecast."},"inputs":{"mcx_price":"Demo only","kotak_neo":"Not connected","henry_hub":"Not connected","usd_inr":"Not connected","weather":"Not connected","eia_storage":"Not connected","news":"Not connected"}}
+    kotak_status = connection_status()
+    return {"mode":"DEMO — SYNTHETIC DATA","timestamp_utc":now,"contract":"MCX Natural Gas Futures (demo placeholder)","price":price,"previous_close":close,"change":change,"change_pct":round(change/close*100,2),"day_high":round(max(price+1.1,265.1),2),"day_low":round(min(price-1,261.9),2),"volume":18420,"open_interest":44558,"oi_change":3269,"vwap":round(price-.35,2),"levels":{"support_1":260.0,"support_2":257.5,"resistance_1":265.0,"resistance_2":268.0},"signals":{"daily_bias":"WAIT FOR LIVE DATA","intraday_setup":"No trade — demo mode","overnight_gap":"Not forecast — historical validation required","reason":"Synthetic placeholders only. No live MCX prices, verified signal or forecast."},"inputs":{"mcx_price":"Demo only","kotak_neo":("Credentials ready — feed not verified" if kotak_status["configured"] else "Not configured"),"henry_hub":"Not connected","usd_inr":"Not connected","weather":"Not connected","eia_storage":"Not connected","news":"Not connected"}}
 
 @app.get("/", response_class=HTMLResponse)
 def home(): return HTMLResponse(PAGE)
@@ -25,5 +27,10 @@ def home(): return HTMLResponse(PAGE)
 def health(): return {"ok":True,"app":"MCX Natural Gas Radar","demo_mode":True,"version":"0.1.1"}
 @app.get("/api/snapshot")
 def api_snapshot(): return snapshot()
+@app.get("/api/kotak/status")
+def kotak_status():
+    """Safe readiness check; never returns credential values."""
+    return connection_status()
+
 @app.get("/api/history/status")
 def history_status(): return {"status":"not_connected","message":"Historical MCX candles are not connected. Add an authorized historical source before backtesting forecasts.","needed":["timestamp","expiry","open","high","low","close","volume","open_interest"]}
