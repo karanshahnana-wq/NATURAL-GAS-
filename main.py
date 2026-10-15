@@ -74,6 +74,59 @@ def get_live_mcx_quote():
     return result
 
 
+def _get_json(url: str, timeout: float = 4.0):
+    """Fetch a public JSON endpoint with a short timeout; return None on failure."""
+    import json
+    from urllib.request import Request, urlopen
+    try:
+        req = Request(url, headers={"User-Agent": "MCX-Natural-Gas-Radar/1.0"})
+        with urlopen(req, timeout=timeout) as response:
+            if response.status != 200:
+                return None
+            return json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _yahoo_last(symbol: str):
+    """Best-effort public delayed reference quote; not an exchange-authoritative MCX feed."""
+    import urllib.parse
+    encoded = urllib.parse.quote(symbol, safe="")
+    payload = _get_json(f"https://query1.finance.yahoo.com/v8/finance/chart/{encoded}?range=5d&interval=1d")
+    try:
+        result = payload["chart"]["result"][0]
+        meta = result["meta"]
+        quote = result["indicators"]["quote"][0]
+        closes = [v for v in quote.get("close", []) if isinstance(v, (int, float))]
+        if not closes:
+            return None
+        return {"symbol": symbol, "price": float(meta.get("regularMarketPrice", closes[-1])),
+                "previous_close": float(meta.get("chartPreviousClose", closes[-2] if len(closes) > 1 else closes[-1])),
+                "currency": meta.get("currency"),
+                "timestamp": datetime.fromtimestamp(meta.get("regularMarketTime", time.time()), timezone.utc).isoformat(),
+                "source": "Yahoo Finance chart endpoint; reference data, may be delayed"}
+    except Exception:
+        return None
+
+
+def _global_drivers():
+    """Fetch public reference drivers. These are context, not direct MCX signals."""
+    henry = _yahoo_last("NG=F")
+    usdinr = _yahoo_last("INR=X")
+    weather = _get_json("https://api.open-meteo.com/v1/forecast?latitude=30.10&longitude=-91.10&daily=temperature_2m_mean,temperature_2m_min,temperature_2m_max&temperature_unit=fahrenheit&forecast_days=3&timezone=America%2FChicago")
+    weather_summary = None
+    try:
+        daily = weather["daily"]
+        weather_summary = {"location":"Henry Hub area, Louisiana","dates":daily["time"],
+                           "mean_f":daily["temperature_2m_mean"],"min_f":daily["temperature_2m_min"],
+                           "max_f":daily["temperature_2m_max"],"source":"Open-Meteo forecast API"}
+    except Exception:
+        pass
+    return {"henry_hub_reference":henry,"usd_inr_reference":usdinr,"us_gulf_weather":weather_summary,
+            "eia_storage":{"status":"not_connected","note":"Official EIA weekly storage series not yet configured"},
+            "mcx_historical":{"status":"unavailable_from_kotak_api","note":"Kotak Neo historical-data docs exclude MCX futures; an authorized historical source is required"}}
+
+
 def snapshot():
     now = datetime.now(timezone.utc).isoformat()
     demo_close = 263.70
@@ -86,6 +139,7 @@ def snapshot():
         except Exception:
             live_quote = None
     price = live_quote["price"] if live_quote else demo_price
+    drivers = _global_drivers()
     # Do not calculate live change from a hard-coded synthetic previous close.
     return {
         "mode": "KOTAK LIVE QUOTE" if live_quote else "DEMO — SYNTHETIC DATA",
@@ -109,6 +163,7 @@ def snapshot():
             "overnight_gap": "Not forecast — historical validation required",
             "reason": "Only the Kotak last-traded quote is connected. Previous close, OHLC, VWAP, volume, OI, levels and signals are not verified live data."
         },
+        "global_drivers": drivers,
         "inputs": {
             "mcx_price": "Kotak quote connected" if live_quote else "Demo only",
             "previous_close_ohlc": "Not connected",
@@ -119,7 +174,12 @@ def snapshot():
             "usd_inr": "Not connected",
             "weather": "Not connected",
             "eia_storage": "Not connected",
-            "news": "Not connected"
+            "news": "Not connected",
+            "henry_hub": "Live reference available" if drivers["henry_hub_reference"] else "Unavailable",
+            "usd_inr": "Live reference available" if drivers["usd_inr_reference"] else "Unavailable",
+            "weather": "Forecast available" if drivers["us_gulf_weather"] else "Unavailable",
+            "eia_storage": "Not connected",
+            "mcx_historical_candles": "Not available from Kotak historical API"
         }
     }
 
@@ -266,5 +326,15 @@ def kotak_mcx_test():
                 "diagnostic": detail,
                 "message": "MCX contract/quote test failed. " + detail["message"]}
 
+@app.get("/api/drivers")
+def api_drivers():
+    """Public reference drivers with source/time metadata; no trade recommendations."""
+    return _global_drivers()
+
+
 @app.get("/api/history/status")
-def history_status(): return {"status":"not_connected","message":"Historical MCX candles are not connected. Add an authorized historical source before backtesting forecasts.","needed":["timestamp","expiry","open","high","low","close","volume","open_interest"]}
+def history_status():
+    return {"status":"blocked_external_source_required",
+            "message":"Kotak Neo historical-data documentation excludes MCX futures. Historical MCX candles and reliable backtesting require an authorized MCX historical-data provider.",
+            "needed":["timestamp","contract","expiry","open","high","low","close","volume","open_interest"],
+            "kotak_supported":False}
