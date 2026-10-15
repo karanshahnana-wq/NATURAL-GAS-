@@ -36,6 +36,37 @@ def kotak_status():
     """Safe readiness check; never returns credential values."""
     return connection_status()
 
+def _safe_kotak_error(exc: Exception) -> dict:
+    """Classify SDK failures without returning raw exception text or credentials."""
+    response = getattr(exc, "response", None)
+    status = getattr(exc, "status_code", None) or getattr(response, "status_code", None)
+    code = getattr(exc, "code", None)
+    name = type(exc).__name__
+    # Use text only for classification; never return or log the raw value here.
+    try:
+        hint = str(exc).lower()
+    except Exception:
+        hint = ""
+    if status == 429 or "rate limit" in hint or "too many requests" in hint:
+        category, message = "rate_limited", "Kotak rate-limited the request. Wait before retrying."
+    elif status in (401, 403) or "unauthorized" in hint or "forbidden" in hint:
+        category, message = "auth_or_permission", "Kotak rejected access. Check API access, consumer key, and account permissions."
+    elif "timeout" in name.lower() or "timed out" in hint or "timeout" in hint:
+        category, message = "timeout", "The request timed out before Kotak completed the response. Check again later."
+    elif "connection" in hint or "connection" in name.lower() or "failed to establish" in hint:
+        category, message = "connection_error", "Could not establish a connection to Kotak's API; no successful response was received."
+    elif status:
+        category, message = "kotak_http_error", f"Kotak returned an HTTP {status} response."
+    else:
+        category, message = "sdk_error", "The Kotak SDK failed before a verified login response. See the private Render logs for the sanitized SDK event."
+    result = {"category": category, "message": message, "exception_type": name}
+    if isinstance(status, int):
+        result["http_status"] = status
+    if isinstance(code, (str, int)) and len(str(code)) <= 40:
+        result["error_code"] = str(code)
+    return result
+
+
 @app.post("/api/kotak/test")
 def kotak_test(request: Request):
     """Attempt one authenticated login, with a short cooldown and sanitized errors."""
@@ -54,11 +85,10 @@ def kotak_test(request: Request):
         return {"ok": True, "authenticated": True, "mcx_quote_verified": False,
                 "message": "Kotak authentication call completed. MCX instrument/quote and WebSocket feed still need separate verification."}
     except Exception as exc:
-        # Do not return raw exception text because SDK errors may contain sensitive details.
-        code = type(exc).__name__
+        detail = _safe_kotak_error(exc)
         return {"ok": False, "authenticated": False, "mcx_quote_verified": False,
-                "code": code,
-                "message": "Kotak authentication test failed. Check the private Render logs for details, and verify TOTP setup, MPIN, consumer key and API permissions. Secret values are not shown here."}
+                "code": detail["exception_type"], "diagnostic": detail,
+                "message": "Kotak authentication test failed. " + detail["message"]}
 
 @app.post("/api/kotak/mcx-test")
 def kotak_mcx_test():
@@ -107,8 +137,10 @@ def kotak_mcx_test():
     except HTTPException:
         raise
     except Exception as exc:
-        return {"ok": False, "mcx_quote_verified": False, "code": type(exc).__name__,
-                "message": "MCX contract/quote test failed. Check private Render logs and verify API market-data permissions. Sensitive details are hidden."}
+        detail = _safe_kotak_error(exc)
+        return {"ok": False, "mcx_quote_verified": False, "code": detail["exception_type"],
+                "diagnostic": detail,
+                "message": "MCX contract/quote test failed. " + detail["message"]}
 
 @app.get("/api/history/status")
 def history_status(): return {"status":"not_connected","message":"Historical MCX candles are not connected. Add an authorized historical source before backtesting forecasts.","needed":["timestamp","expiry","open","high","low","close","volume","open_interest"]}
