@@ -264,7 +264,8 @@ def snapshot():
         "day_open": live_quote.get("day_open") if live_quote else None,
         "day_high": day_high, "day_low": day_low, "volume": volume,
         "open_interest": open_interest, "oi_change": oi_change, "vwap": vwap,
-        "levels": levels,\n        "context": context,
+        "levels": levels,
+        "context": context,
         "signals": {
             "daily_bias": "WAIT FOR LIVE DATA",
             "intraday_setup": "No trade — demo mode",
