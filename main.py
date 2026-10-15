@@ -102,25 +102,48 @@ def kotak_mcx_test():
     _last_kotak_test = now
     try:
         client = create_authenticated_client()
-        chain = client.option_chain(exchange="mcx_fo", underlying="NATURALGAS", instrument_type="fut")
-        data = chain.get("data", chain) if isinstance(chain, dict) else {}
-        futures = data.get("fut", []) if isinstance(data, dict) else []
         candidates = []
-        for item in futures if isinstance(futures, list) else []:
-            inst = item.get("inst", {}) if isinstance(item, dict) else {}
-            neo_symbol = inst.get("neoSymbol", "")
-            symbol = inst.get("symbol", "")
-            expiry = inst.get("expiryDt", "")
-            if isinstance(neo_symbol, str) and "|" in neo_symbol and neo_symbol.startswith("mcx_fo|"):
-                candidates.append((neo_symbol, symbol, expiry))
+        # First try the futures-chain endpoint; underlying must match pSymbolName in the live scrip master.
+        chain_error = None
+        for underlying in ("NATURALGAS", "NATURAL GAS"):
+            try:
+                chain = client.option_chain(exchange="mcx_fo", underlying=underlying, instrument_type="fut")
+                data = chain.get("data", chain) if isinstance(chain, dict) else {}
+                futures = data.get("fut", []) if isinstance(data, dict) else []
+                for item in futures if isinstance(futures, list) else []:
+                    inst = item.get("inst", {}) if isinstance(item, dict) else {}
+                    neo_symbol = inst.get("neoSymbol", "")
+                    symbol = inst.get("symbol", "")
+                    expiry = inst.get("expiryDt", "")
+                    if isinstance(neo_symbol, str) and "|" in neo_symbol and neo_symbol.startswith("mcx_fo|"):
+                        candidates.append((neo_symbol, symbol, expiry))
+                if candidates:
+                    break
+            except Exception as exc:
+                chain_error = type(exc).__name__
+        # Reliable fallback: search the current MCX scrip master for futures, using its pSymbolName.
+        if not candidates:
+            try:
+                rows = client.search_scrip(exchange_segment="mcx_fo", symbol="NATURALGAS", expiry="", option_type="FUT", strike_price="")
+                for row in rows if isinstance(rows, list) else []:
+                    token = row.get("pSymbol")
+                    symbol = row.get("pTrdSymbol") or row.get("pSymbolName") or ""
+                    expiry = row.get("pExpiryDate") or row.get("lExpiryDate") or ""
+                    if token is not None and str(token).strip():
+                        candidates.append((f"mcx_fo|{token}", symbol, str(expiry)))
+            except Exception:
+                pass
         if not candidates:
             return {"ok": False, "mcx_quote_verified": False,
-                    "message": "Kotak responded, but no Natural Gas MCX futures contract was returned. Check market-data permission and the underlying name in the current scrip master."}
-        # Choose the nearest returned expiry when the API provides expiry dates in sortable DD-MMM-YYYY form.
+                    "diagnostic": {"category": "no_contract_found", "chain_error": chain_error},
+                    "message": "Kotak responded, but neither the futures chain nor the current MCX scrip master returned a Natural Gas futures contract. This does not prove a permission problem; the current symbol/market-data response needs inspection."}
+        # Prefer the nearest expiry; support both DD-MMM-YYYY and ISO dates.
         def expiry_key(row):
             from datetime import datetime as _dt
-            try: return _dt.strptime(row[2], "%d-%b-%Y")
-            except Exception: return _dt.max
+            for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d%b%Y"):
+                try: return _dt.strptime(row[2], fmt)
+                except Exception: pass
+            return _dt.max
         neo_symbol, symbol, expiry = sorted(candidates, key=expiry_key)[0]
         segment, token = neo_symbol.split("|", 1)
         response = client.quotes(instrument_tokens=[{"instrument_token": token, "exchange_segment": segment}], quote_type="all")
