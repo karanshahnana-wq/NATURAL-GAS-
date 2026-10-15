@@ -17,9 +17,23 @@ REQUIRED_ENV = (
 )
 
 
+def _value(key: str, legacy_key: str | None = None) -> str:
+    """Read the preferred environment key, with a backwards-compatible alias."""
+    value = os.getenv(key, "").strip()
+    if value:
+        return value
+    return os.getenv(legacy_key, "").strip() if legacy_key else ""
+
+
 def connection_status() -> dict[str, Any]:
     """Return safe readiness metadata; never disclose the actual secrets."""
-    present = {key: bool(os.getenv(key, "").strip()) for key in REQUIRED_ENV}
+    present = {
+        "NEO_CONSUMER_KEY": bool(_value("NEO_CONSUMER_KEY")),
+        "NEO_MOBILE_NUMBER": bool(_value("NEO_MOBILE_NUMBER")),
+        "NEO_UCC": bool(_value("NEO_UCC")),
+        "NEO_MPIN": bool(_value("NEO_MPIN", "MPIN")),
+        "NEO_TOTP_SECRET": bool(_value("NEO_TOTP_SECRET")),
+    }
     ready = all(present.values())
     return {
         "configured": ready,
@@ -55,13 +69,13 @@ def create_authenticated_client() -> Any:
     import pyotp
 
     client = NeoAPI(
-        consumer_key=os.environ["NEO_CONSUMER_KEY"],
+        consumer_key=_value("NEO_CONSUMER_KEY"),
         environment=os.getenv("NEO_ENVIRONMENT", "prod"),
     )
-    mobile = os.environ["NEO_MOBILE_NUMBER"]
-    ucc = os.environ["NEO_UCC"]
-    totp = pyotp.TOTP(os.environ["NEO_TOTP_SECRET"]).now()
+    mobile = _value("NEO_MOBILE_NUMBER")
+    ucc = _value("NEO_UCC")
+    totp = pyotp.TOTP(_value("NEO_TOTP_SECRET")).now()
 
     client.totp_login(mobile_number=mobile, ucc=ucc, totp=totp)
-    client.totp_validate(mpin=os.environ["NEO_MPIN"])
+    client.totp_validate(mpin=_value("NEO_MPIN", "MPIN"))
     return client
