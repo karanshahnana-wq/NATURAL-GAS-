@@ -89,7 +89,7 @@ def get_live_mcx_quote():
         except (TypeError, ValueError): return None
     ohlc = quote.get("ohlc") if isinstance(quote.get("ohlc"), dict) else {}
     result = {"price": number(ltp), "contract": symbol or neo_symbol, "expiry": expiry,
-              "timestamp_utc": datetime.now(timezone.utc).isoformat(), "live_quote": True,\n              "change_pct": number(quote.get("per_change")) if number(quote.get("per_change")) is not None else None,
+              "timestamp_utc": datetime.now(timezone.utc).isoformat(), "live_quote": True,
               "previous_close": number(ohlc.get("close")), "day_open": number(ohlc.get("open")),
               "day_high": number(ohlc.get("high")), "day_low": number(ohlc.get("low")),
               "change": number(quote.get("change")), "change_pct": number(quote.get("per_change")),
