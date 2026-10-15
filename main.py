@@ -71,8 +71,7 @@ def kotak_mcx_test():
         raise HTTPException(status_code=429, detail="Please wait 15 seconds before another MCX test.")
     _last_kotak_test = now
     try:
-        from neo_api_client import NeoAPI
-        client = NeoAPI(consumer_key=os.getenv("NEO_CONSUMER_KEY", "").strip(), environment=os.getenv("NEO_ENVIRONMENT", "prod"))
+        client = create_authenticated_client()
         chain = client.option_chain(exchange="mcx_fo", underlying="NATURALGAS", instrument_type="fut")
         data = chain.get("data", chain) if isinstance(chain, dict) else {}
         futures = data.get("fut", []) if isinstance(data, dict) else []
