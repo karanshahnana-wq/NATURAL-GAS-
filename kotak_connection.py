@@ -62,6 +62,25 @@ def _mobile_number() -> str:
     raise RuntimeError("NEO_MOBILE_NUMBER must be a valid registered mobile number; use +91 followed by the 10-digit Indian number.")
 
 
+def _totp_secret() -> str:
+    """Normalize a copied Base32 setup key or otpauth:// URI without exposing it."""
+    import base64
+    from urllib.parse import parse_qs, urlparse
+
+    raw = _value("NEO_TOTP_SECRET")
+    if raw.lower().startswith("otpauth://"):
+        parsed = urlparse(raw)
+        raw = parse_qs(parsed.query).get("secret", [""])[0]
+    secret = "".join(raw.split()).replace("-", "").upper()
+    if not secret:
+        raise RuntimeError("NEO_TOTP_SECRET is empty. Save the TOTP setup key from Kotak's API TOTP registration.")
+    try:
+        base64.b32decode(secret + ("=" * ((8 - len(secret) % 8) % 8)), casefold=True)
+    except Exception:
+        raise RuntimeError("NEO_TOTP_SECRET is not a valid Base32 setup key. Save the authenticator setup key, not a six-digit code.")
+    return secret
+
+
 def _has_api_error(response: Any) -> bool:
     """Detect SDK responses that contain an API error even if no exception was raised."""
     if not isinstance(response, dict):
@@ -95,7 +114,9 @@ def create_authenticated_client() -> Any:
     )
     mobile = _mobile_number()
     ucc = _value("NEO_UCC")
-    totp = pyotp.TOTP(_value("NEO_TOTP_SECRET")).now()
+    # Normalize spaces/case/otpauth URI so pasted setup keys work reliably.
+    secret = _totp_secret()
+    totp = pyotp.TOTP(secret).now()
 
     login_response = client.totp_login(mobile_number=mobile, ucc=ucc, totp=totp)
     if _has_api_error(login_response):
