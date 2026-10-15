@@ -126,7 +126,7 @@ def _yahoo_last(symbol: str):
         closes = [v for v in quote.get("close", []) if isinstance(v, (int, float))]
         if not closes:
             return None
-        return {"symbol": symbol, "price": float(meta.get("regularMarketPrice", closes[-1])),\n                "change_pct": ((float(closes[-1])-float(closes[-2]))/float(closes[-2])*100) if len(closes)>1 and closes[-2] else None,
+        return {"symbol": symbol, "price": float(meta.get("regularMarketPrice", closes[-1])),
                 "previous_close": float(meta.get("chartPreviousClose", closes[-2] if len(closes) > 1 else closes[-1])),
                 "currency": meta.get("currency"),
                 "timestamp": datetime.fromtimestamp(meta.get("regularMarketTime", time.time()), timezone.utc).isoformat(),
