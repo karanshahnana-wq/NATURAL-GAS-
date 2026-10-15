@@ -89,7 +89,7 @@ def get_live_mcx_quote():
         except (TypeError, ValueError): return None
     ohlc = quote.get("ohlc") if isinstance(quote.get("ohlc"), dict) else {}
     result = {"price": number(ltp), "contract": symbol or neo_symbol, "expiry": expiry,
-              "timestamp_utc": datetime.now(timezone.utc).isoformat(), "live_quote": True,
+              "timestamp_utc": datetime.now(timezone.utc).isoformat(), "live_quote": True,\n              "change_pct": number(quote.get("per_change")) if number(quote.get("per_change")) is not None else None,
               "previous_close": number(ohlc.get("close")), "day_open": number(ohlc.get("open")),
               "day_high": number(ohlc.get("high")), "day_low": number(ohlc.get("low")),
               "change": number(quote.get("change")), "change_pct": number(quote.get("per_change")),
@@ -126,13 +126,62 @@ def _yahoo_last(symbol: str):
         closes = [v for v in quote.get("close", []) if isinstance(v, (int, float))]
         if not closes:
             return None
-        return {"symbol": symbol, "price": float(meta.get("regularMarketPrice", closes[-1])),
+        return {"symbol": symbol, "price": float(meta.get("regularMarketPrice", closes[-1])),\n                "change_pct": ((float(closes[-1])-float(closes[-2]))/float(closes[-2])*100) if len(closes)>1 and closes[-2] else None,
                 "previous_close": float(meta.get("chartPreviousClose", closes[-2] if len(closes) > 1 else closes[-1])),
                 "currency": meta.get("currency"),
                 "timestamp": datetime.fromtimestamp(meta.get("regularMarketTime", time.time()), timezone.utc).isoformat(),
                 "source": "Yahoo Finance chart endpoint; reference data, may be delayed"}
     except Exception:
         return None
+
+
+def _eia_storage():
+    """Fetch official EIA weekly working-gas storage data when an EIA key is configured."""
+    key = os.getenv("EIA_API_KEY", "").strip()
+    if not key:
+        return {"status":"api_key_required","note":"Add EIA_API_KEY in Render environment to enable official weekly storage and surprise tracking."}
+    import urllib.parse
+    params = urllib.parse.urlencode({
+        "api_key": key, "frequency":"weekly", "data[0]":"value",
+        "facets[series][]":"NW2_EPG0_SWO_R48_BCF",
+        "sort[0][column]":"period", "sort[0][direction]":"desc",
+        "offset":"0", "length":"3"
+    })
+    payload = _get_json("https://api.eia.gov/v2/natural-gas/stor/wkly/data/?"+params, timeout=6)
+    try:
+        rows = payload["response"]["data"]
+        if not rows:
+            return {"status":"empty","note":"EIA returned no storage observations."}
+        latest = rows[0]
+        previous = rows[1] if len(rows)>1 else None
+        return {"status":"connected","series":"Lower 48 working gas in underground storage","period":latest.get("period"),
+                "value_bcf":float(latest["value"]) if latest.get("value") is not None else None,
+                "previous_period":previous.get("period") if previous else None,
+                "previous_value_bcf":float(previous["value"]) if previous and previous.get("value") is not None else None,
+                "source":"U.S. EIA API v2","checked_at_utc":datetime.now(timezone.utc).isoformat()}
+    except Exception:
+        return {"status":"feed_unavailable","note":"EIA endpoint did not return the expected series; verify API key and series access."}
+
+
+def _news_headlines():
+    """Read a small set of current natural-gas headlines from a public RSS feed."""
+    from urllib.request import Request, urlopen
+    import xml.etree.ElementTree as ET
+    url = "https://news.google.com/rss/search?q=natural+gas+LNG+storage+weather+when:7d&hl=en-US&gl=US&ceid=US:en"
+    try:
+        req = Request(url, headers={"User-Agent":"MCX-Natural-Gas-Radar/1.0"})
+        with urlopen(req, timeout=5) as response:
+            root = ET.fromstring(response.read())
+        items = []
+        for item in root.findall("./channel/item")[:6]:
+            items.append({"title":item.findtext("title","").strip(),
+                          "published":item.findtext("pubDate",""),
+                          "url":item.findtext("link",""),
+                          "source":"Google News RSS"})
+        return {"status":"connected" if items else "empty","items":items,
+                "checked_at_utc":datetime.now(timezone.utc).isoformat()}
+    except Exception:
+        return {"status":"feed_unavailable","items":[],"note":"Public news RSS could not be reached from the service."}
 
 
 def _global_drivers():
@@ -151,10 +200,12 @@ def _global_drivers():
                            "max_f":daily["temperature_2m_max"],"source":"Open-Meteo forecast API"}
     except Exception:
         pass
+    eia = _eia_storage()
+    news = _news_headlines()
     result = {"checked_at_utc": datetime.now(timezone.utc).isoformat(),
               "henry_hub_reference":henry,"usd_inr_reference":usdinr,"us_gulf_weather":weather_summary,
-              "eia_storage":{"status":"not_connected","note":"Official EIA weekly storage series not yet configured"},
-              "mcx_historical":{"status":"unavailable_from_kotak_api","note":"Kotak Neo historical-data docs exclude MCX futures; an authorized historical source is required"}}
+              "eia_storage":eia,"news":news,
+              "mcx_historical":{"status":"unavailable_from_kotak_api","note":"Kotak Neo historical-data docs exclude MCX futures; use an authorized MCX historical-data provider for research-grade candles."}}
     _driver_cache["checked_at"], _driver_cache["data"] = now, result
     return result
 
@@ -182,6 +233,27 @@ def snapshot():
     vwap = live_quote.get("vwap") if live_quote else None
     open_interest = live_quote.get("open_interest") if live_quote else None
     oi_change = live_quote.get("oi_change") if live_quote else None
+    # Transparent intraday pivots use only broker-returned session OHLC. They are not historical S/R.
+    levels = {"status":"not_calculated","method":None,"pivot":None,"support_1":None,"support_2":None,"resistance_1":None,"resistance_2":None}
+    if live_quote and all(isinstance(live_quote.get(k),(int,float)) for k in ("day_high","day_low","previous_close")):
+        h, l, prev = live_quote["day_high"], live_quote["day_low"], live_quote["previous_close"]
+        pivot = (h+l+prev)/3
+        levels = {"status":"calculated_from_broker_ohlc","method":"Classic floor pivots from quote OHLC; provisional intraday reference",
+                  "pivot":round(pivot,2),"support_1":round(2*pivot-h,2),"support_2":round(pivot-(h-l),2),
+                  "resistance_1":round(2*pivot-l,2),"resistance_2":round(pivot+(h-l),2)}
+    # A descriptive context score only; not a tested entry/exit strategy.
+    context = {"status":"insufficient_data","score":None,"label":"WAIT — insufficient verified inputs",
+               "factors":[],"warning":"Context score is descriptive only, not a validated trading signal."}
+    if live_quote and isinstance(live_quote.get("day_open"),(int,float)) and isinstance(live_quote.get("price"),(int,float)):
+        score = 1 if live_quote["price"] > live_quote["day_open"] else (-1 if live_quote["price"] < live_quote["day_open"] else 0)
+        factors = [{"name":"MCX price vs broker session open","direction":"bullish" if score>0 else "bearish" if score<0 else "neutral","score":score}]
+        hh = drivers.get("henry_hub_reference")
+        if hh and isinstance(hh.get("change_pct"),(int,float)):
+            hs = 1 if hh["change_pct"] > 0.25 else (-1 if hh["change_pct"] < -0.25 else 0)
+            factors.append({"name":"Henry Hub reference move","direction":"bullish" if hs>0 else "bearish" if hs<0 else "neutral","score":hs})
+            score += hs
+        context = {"status":"context_only","score":score,"label":"Bullish context" if score>0 else "Bearish context" if score<0 else "Mixed / neutral context",
+                   "factors":factors,"warning":"Not a validated strategy. Do not trade from this score alone."}
     return {
         "mode": "KOTAK LIVE QUOTE" if live_quote else "DEMO — SYNTHETIC DATA",
         "live_quote": bool(live_quote),
@@ -192,7 +264,7 @@ def snapshot():
         "day_open": live_quote.get("day_open") if live_quote else None,
         "day_high": day_high, "day_low": day_low, "volume": volume,
         "open_interest": open_interest, "oi_change": oi_change, "vwap": vwap,
-        "levels": {"status": "not_calculated", "support_1": None, "support_2": None, "resistance_1": None, "resistance_2": None},
+        "levels": levels,\n        "context": context,
         "signals": {
             "daily_bias": "WAIT FOR LIVE DATA",
             "intraday_setup": "No trade — demo mode",
@@ -209,8 +281,8 @@ def snapshot():
             "henry_hub": "Public reference available" if drivers["henry_hub_reference"] else "Unavailable",
             "usd_inr": "Public reference available" if drivers["usd_inr_reference"] else "Unavailable",
             "weather": "Forecast available" if drivers["us_gulf_weather"] else "Unavailable",
-            "eia_storage": "Not connected", "news": "Not connected",
-            "mcx_historical_candles": "Not available from Kotak historical API"
+            "eia_storage": drivers.get("eia_storage",{}).get("status","unavailable"), "news": drivers.get("news",{}).get("status","unavailable"),
+            "mcx_historical_candles": "Authorized external source required"
         }
     }
 
