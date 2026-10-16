@@ -6,6 +6,7 @@ This module never returns or logs credential values.
 from __future__ import annotations
 
 import os
+import logging
 from typing import Any
 
 REQUIRED_ENV = (
@@ -98,7 +99,15 @@ def _sdk_available() -> bool:
 
 
 def create_authenticated_client() -> Any:
-    """Authenticate on demand; callers must not expose SDK errors containing secrets."""
+    """Authenticate on demand without allowing SDK request bodies into hosted logs."""
+    # The SDK logs login request payloads at ERROR level in some versions. App routes
+    # return sanitized diagnostics, so suppress its payload logger to protect account
+    # identifiers, authentication metadata, and request bodies in Render logs.
+    for logger_name in (
+        "neo_api_client", "neo_api_client.rest", "neo_api_client.websocket",
+        "neo_api_client.rest_client",
+    ):
+        logging.getLogger(logger_name).setLevel(logging.CRITICAL)
     status = connection_status()
     if not status["configured"]:
         raise RuntimeError("Kotak Neo credentials are not fully configured.")
