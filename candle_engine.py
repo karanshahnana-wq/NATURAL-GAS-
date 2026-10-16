@@ -37,6 +37,9 @@ def _connect() -> sqlite3.Connection:
     path = _db_path()
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=10000")
     conn.execute("""CREATE TABLE IF NOT EXISTS candles (
         contract TEXT NOT NULL, expiry TEXT NOT NULL, interval TEXT NOT NULL,
         bucket_epoch INTEGER NOT NULL, open REAL NOT NULL, high REAL NOT NULL,
@@ -115,9 +118,12 @@ def _write_tick(contract: str, expiry: str, epoch: float, price: float, volume_d
                 )
             else:
                 conn.execute(
-                    "INSERT OR REPLACE INTO candles "
+                    "INSERT INTO candles "
                     "(contract,expiry,interval,bucket_epoch,open,high,low,close,volume,tick_count,updated_utc) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(contract,expiry,interval,bucket_epoch) DO UPDATE SET "
+                    "open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, "
+                    "volume=excluded.volume, tick_count=excluded.tick_count, updated_utc=excluded.updated_utc",
                     (contract, expiry, interval, bucket, price, price, price, price,
                      volume_delta, 1, stamp),
                 )
