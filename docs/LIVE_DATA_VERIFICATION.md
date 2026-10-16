@@ -25,7 +25,7 @@ The script logs UTC timestamp, resolved contract/expiry, LTP, broker volume fiel
 python -m unittest discover -s tests -v
 ```
 
-The tests cover OHLCV aggregation, minute/five-minute boundaries, and malformed ticks using deterministic synthetic fixtures. They do not certify live Kotak feed accuracy.
+The regression suite covers OHLCV aggregation, minute/five-minute boundaries, malformed ticks, historical OHLC validation and gap ordering, next-bar backtest execution/costs, and tick serialization across SDK object layouts. Fixtures are deterministic and synthetic; they do not certify live Kotak feed accuracy or strategy profitability.
 
 ## 3. Validate authorized historical MCX CSV data
 
