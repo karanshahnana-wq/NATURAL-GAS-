@@ -801,6 +801,43 @@ def api_kotak_options():
         _options_cache.update(checked_at=now, data=result)
         return result
 
+@app.get("/api/forecast")
+def api_forecast():
+    """Transparent short-horizon direction estimate from verified live MCX candles only."""
+    candles = get_candles(interval="5m", limit=300).get("candles", [])
+    candles = [c for c in candles if all(isinstance(c.get(k), (int, float)) for k in ("open", "high", "low", "close"))]
+    if len(candles) < 30:
+        return {"status":"insufficient_data","direction":"WAIT — insufficient verified candles",
+                "confidence_label":"Unavailable","score":None,"candle_count":len(candles),
+                "horizon":"Next 30–60 minutes","synthetic":False,
+                "warning":"Need at least 30 real 5-minute Kotak candles. No forecast is issued from demo data."}
+    closes=[float(c["close"]) for c in candles]; highs=[float(c["high"]) for c in candles]; lows=[float(c["low"]) for c in candles]
+    def ema(values, period):
+        alpha=2/(period+1); out=sum(values[:period])/period
+        for v in values[period:]: out=alpha*v+(1-alpha)*out
+        return out
+    e9,e21=ema(closes,9),ema(closes,21)
+    changes=[closes[i]-closes[i-1] for i in range(1,len(closes))]
+    gains=[max(v,0) for v in changes[-14:]]; losses=[max(-v,0) for v in changes[-14:]]
+    ag,al=sum(gains)/14,sum(losses)/14
+    rsi=100 if al==0 and ag>0 else 50 if al==0 else 100-(100/(1+ag/al))
+    trs=[max(highs[i]-lows[i],abs(highs[i]-closes[i-1]),abs(lows[i]-closes[i-1])) for i in range(1,len(candles))]
+    atr=sum(trs[-14:])/14
+    momentum=closes[-1]-closes[-6]; score=0
+    score += 1 if e9>e21 else -1 if e9<e21 else 0
+    score += 1 if closes[-1]>e9 else -1 if closes[-1]<e9 else 0
+    score += 1 if rsi>=55 else -1 if rsi<=45 else 0
+    score += 1 if momentum>0 else -1 if momentum<0 else 0
+    direction="BULLISH BIAS" if score>=2 else "BEARISH BIAS" if score<=-2 else "SIDEWAYS / MIXED"
+    confidence="MODERATE" if abs(score)>=3 and len(candles)>=60 else "LOW"
+    invalidation=round(closes[-1]-atr,2) if score>=2 else round(closes[-1]+atr,2) if score<=-2 else "Wait for breakout"
+    return {"status":"rule_based_estimate","direction":direction,"horizon":"Next 30–60 minutes",
+            "confidence_label":confidence,"score":score,"latest_close":round(closes[-1],2),
+            "ema_9":round(e9,2),"ema_21":round(e21,2),"rsi_14":round(rsi,2),
+            "atr_14":round(atr,2),"candle_count":len(candles),"invalidation":invalidation,
+            "latest_candle_utc":candles[-1].get("updated_utc"),"synthetic":False,
+            "warning":"Unvalidated heuristic, not a calibrated probability or proven strategy. Directional context only; avoid entries if data is stale."}
+
 @app.on_event("startup")
 def start_live_candle_collection():
     """Start live tick collection when Kotak credentials are configured."""
