@@ -1,6 +1,10 @@
 from datetime import datetime, timezone
 from pathlib import Path
-import os, math, time
+import os, math, time, logging
+
+# Kotak SDK REST errors may include account identifiers and request payloads.
+# Disable its raw request logger; expose only our sanitized diagnostics.
+logging.getLogger("neo_api_client.rest").disabled = True
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from kotak_connection import connection_status, create_authenticated_client
