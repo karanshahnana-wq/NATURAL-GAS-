@@ -686,98 +686,118 @@ _options_cache = {"checked_at": 0.0, "data": None}
 
 @app.get("/api/kotak/options")
 def api_kotak_options():
-    """Read-only options-chain summary. Missing broker fields remain unavailable."""
+    """Read-only options-chain summary using Kotak Neo's documented response schema."""
     now = time.monotonic()
     cached = _options_cache.get("data")
     if cached and now - _options_cache.get("checked_at", 0) < 30:
         return cached
     try:
         client = _get_kotak_client()
-        response = None
-        used_underlying = None
-        errors = []
-        for underlying in ("NATURALGAS", "NATURAL GAS"):
-            try:
-                candidate = client.option_chain(exchange="mcx_fo", underlying=underlying, instrument_type="opt")
-                if isinstance(candidate, dict) and not candidate.get("error") and not candidate.get("errors"):
-                    response, used_underlying = candidate, underlying
-                    break
-                errors.append("empty_or_error_response")
-            except Exception as exc:
-                errors.append(type(exc).__name__)
-        if response is None:
-            result = {"status": "unavailable", "source": "Kotak Neo", "synthetic": False,
-                      "message": "Kotak options-chain request failed. No options factors are being inferred.",
-                      "diagnostics": sorted(set(errors))}
+        # Kotak Neo documents instrument_type="option" and returns separate
+        # data.call / data.put arrays; "opt" and data.options are not the API schema.
+        response = client.option_chain(
+            exchange="mcx_fo",
+            underlying="NATURALGAS",
+            instrument_type="option",
+            count=40,
+        )
+        if not isinstance(response, dict) or response.get("error") or response.get("errors"):
+            result = {
+                "status": "unavailable", "source": "Kotak Neo", "synthetic": False,
+                "message": "Kotak did not return a usable options-chain response.",
+                "diagnostics": ["broker_error_or_unexpected_response"],
+            }
         else:
             data = response.get("data", response)
-            options = data.get("opt", data.get("options", [])) if isinstance(data, dict) else []
-            if isinstance(options, dict):
-                options = [v for v in options.values() if isinstance(v, dict)]
-            if not isinstance(options, list):
-                options = []
-            calls, puts = [], []
-            def num(row, keys):
-                for key in keys:
-                    value = row.get(key)
-                    try:
-                        if value not in (None, ""):
-                            return float(value)
-                    except (TypeError, ValueError):
-                        pass
+            if not isinstance(data, dict):
+                data = {}
+            raw_calls = data.get("call", [])
+            raw_puts = data.get("put", [])
+            if not isinstance(raw_calls, list):
+                raw_calls = []
+            if not isinstance(raw_puts, list):
+                raw_puts = []
+
+            def num(value):
+                try:
+                    if value is not None and value != "":
+                        return float(value)
+                except (TypeError, ValueError):
+                    pass
                 return None
-            def leg(row):
-                inst = row.get("inst", {}) if isinstance(row.get("inst"), dict) else {}
-                typ = str(row.get("option_type") or row.get("optionType") or row.get("optType") or inst.get("optionType") or inst.get("option_type") or inst.get("symbol") or row.get("symbol") or "").upper()
-                strike = num(row, ("strike_price", "strikePrice", "strike", "dStrikePrice")) 
-                if strike is None:
-                    strike = num(inst, ("strike_price", "strikePrice", "strike", "dStrikePrice"))
-                oi = num(row, ("open_interest", "open_int", "oi", "openInterest", "openInt"))
-                if oi is None:
-                    oi = num(inst, ("open_interest", "open_int", "oi", "openInterest", "openInt"))
-                vol = num(row, ("volume", "total_volume", "total_traded_volume", "tradedVolume"))
-                if vol is None:
-                    vol = num(inst, ("volume", "total_volume", "total_traded_volume", "tradedVolume"))
-                iv = num(row, ("iv", "implied_volatility", "impliedVolatility"))
-                if iv is None:
-                    iv = num(inst, ("iv", "implied_volatility", "impliedVolatility"))
-                delta_oi = num(row, ("oi_change", "open_int_change", "change_in_oi", "changeInOI"))
-                return {"type": typ, "strike": strike, "oi": oi, "volume": vol, "iv": iv, "oi_change": delta_oi}
-            for row in options:
+
+            def parse_leg(row, option_type):
                 if not isinstance(row, dict):
-                    continue
-                item = leg(row)
-                typ = item["type"]
-                if "CE" in typ or "CALL" in typ:
-                    calls.append(item)
-                elif "PE" in typ or "PUT" in typ:
-                    puts.append(item)
-            call_oi = sum(x["oi"] for x in calls if x["oi"] is not None) if any(x["oi"] is not None for x in calls) else None
-            put_oi = sum(x["oi"] for x in puts if x["oi"] is not None) if any(x["oi"] is not None for x in puts) else None
-            call_vol = sum(x["volume"] for x in calls if x["volume"] is not None) if any(x["volume"] is not None for x in calls) else None
-            put_vol = sum(x["volume"] for x in puts if x["volume"] is not None) if any(x["volume"] is not None for x in puts) else None
+                    return None
+                inst = row.get("instrument", {})
+                quote = row.get("quote", {})
+                oi_data = row.get("openInterest", {})
+                if not isinstance(inst, dict):
+                    inst = {}
+                if not isinstance(quote, dict):
+                    quote = {}
+                if not isinstance(oi_data, dict):
+                    oi_data = {}
+                strike = num(inst.get("strikePrice", inst.get("strike_price", inst.get("strike"))))
+                oi = num(oi_data.get("current", oi_data.get("cur", row.get("open_interest"))))
+                volume = num(quote.get("volume", quote.get("vol", row.get("volume"))))
+                iv = num(row.get("iv", quote.get("iv", inst.get("iv"))))
+                oi_change = num(oi_data.get("change", oi_data.get("chg", row.get("oi_change"))))
+                return {
+                    "type": option_type,
+                    "strike": strike,
+                    "oi": oi,
+                    "volume": volume,
+                    "iv": iv,
+                    "oi_change": oi_change,
+                }
+
+            calls = [x for x in (parse_leg(row, "CE") for row in raw_calls) if x is not None]
+            puts = [x for x in (parse_leg(row, "PE") for row in raw_puts) if x is not None]
+
+            def total(rows, key):
+                values = [x[key] for x in rows if x[key] is not None]
+                return sum(values) if values else None
+
+            call_oi = total(calls, "oi")
+            put_oi = total(puts, "oi")
+            call_vol = total(calls, "volume")
+            put_vol = total(puts, "volume")
+
             def top_strikes(rows):
                 known = [x for x in rows if x["strike"] is not None and x["oi"] is not None]
-                return sorted([{"strike": x["strike"], "oi": x["oi"]} for x in known], key=lambda x: x["oi"], reverse=True)[:5]
+                known.sort(key=lambda x: x["oi"], reverse=True)
+                return [{"strike": x["strike"], "oi": x["oi"]} for x in known[:5]]
+
             parsed_count = len(calls) + len(puts)
-            result = {"status": "connected" if parsed_count else "schema_unverified",
-                      "source": "Kotak Neo", "underlying": used_underlying,
-                      "checked_at_utc": datetime.now(timezone.utc).isoformat(),
-                      "options_rows_parsed": parsed_count, "synthetic": False,
-                      "call_oi": call_oi, "put_oi": put_oi,
-                      "pcr_oi": round(put_oi / call_oi, 4) if call_oi not in (None, 0) and put_oi is not None else None,
-                      "call_volume": call_vol, "put_volume": put_vol,
-                      "pcr_volume": round(put_vol / call_vol, 4) if call_vol not in (None, 0) and put_vol is not None else None,
-                      "top_call_oi_strikes": top_strikes(calls), "top_put_oi_strikes": top_strikes(puts),
-                      "iv_available": any(x["iv"] is not None for x in calls + puts),
-                      "oi_change_available": any(x["oi_change"] is not None for x in calls + puts),
-                      "message": "Values are calculated only from fields returned by Kotak. Null means unavailable; verify row schema before using for decisions." if parsed_count else "Kotak responded, but the returned options schema did not match known call/put fields. PCR and strike levels remain unavailable."}
+            result = {
+                "status": "connected" if parsed_count else "schema_unverified",
+                "source": "Kotak Neo", "underlying": "NATURALGAS",
+                "checked_at_utc": datetime.now(timezone.utc).isoformat(),
+                "options_rows_parsed": parsed_count, "synthetic": False,
+                "call_oi": call_oi, "put_oi": put_oi,
+                "pcr_oi": round(put_oi / call_oi, 4) if call_oi not in (None, 0) and put_oi is not None else None,
+                "call_volume": call_vol, "put_volume": put_vol,
+                "pcr_volume": round(put_vol / call_vol, 4) if call_vol not in (None, 0) and put_vol is not None else None,
+                "top_call_oi_strikes": top_strikes(calls),
+                "top_put_oi_strikes": top_strikes(puts),
+                "iv_available": any(x["iv"] is not None for x in calls + puts),
+                "oi_change_available": any(x["oi_change"] is not None for x in calls + puts),
+                "expiry": (data.get("common_data") or {}).get("expiryDt") if isinstance(data.get("common_data"), dict) else None,
+                "message": (
+                    "Parsed using Kotak Neo's documented call/put, instrument, quote and openInterest fields."
+                    if parsed_count else
+                    "Kotak responded, but no call/put rows were returned for NATURALGAS. PCR and strike levels remain unavailable."
+                ),
+            }
         _options_cache.update(checked_at=now, data=result)
         return result
     except Exception as exc:
-        result = {"status": "unavailable", "source": "Kotak Neo", "synthetic": False,
-                  "error_type": type(exc).__name__,
-                  "message": "Options data is unavailable. No PCR or options signal has been fabricated."}
+        result = {
+            "status": "unavailable", "source": "Kotak Neo", "synthetic": False,
+            "error_type": type(exc).__name__,
+            "message": "Options data is unavailable. No PCR or options signal has been fabricated.",
+        }
         _options_cache.update(checked_at=now, data=result)
         return result
 
