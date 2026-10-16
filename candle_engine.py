@@ -165,6 +165,26 @@ def _thread_main(client_factory: Callable[[], Any], quote_resolver: Callable[[],
 
 
 async def _stream(client_factory: Callable[[], Any], quote_resolver: Callable[[], dict[str, Any]]) -> None:
+    """Keep the live collector running through transient socket/auth/network failures."""
+    backoff = 2
+    while not _stop.is_set():
+        try:
+            await _stream_once(client_factory, quote_resolver)
+            if _stop.is_set():
+                return
+            raise ConnectionError("Kotak SFeed stream ended.")
+        except Exception as exc:
+            with _lock:
+                _state.update(connected=False, status="reconnecting",
+                              message="Live feed disconnected; collector will retry automatically.",
+                              last_error=type(exc).__name__)
+            if _stop.is_set():
+                return
+            await asyncio.sleep(backoff)
+            backoff = min(30, backoff * 2)
+
+
+async def _stream_once(client_factory: Callable[[], Any], quote_resolver: Callable[[], dict[str, Any]]) -> None:
     from neo_api_client.websocket.feed import WsToken, SFeedScrip
     global _last_cumulative_volume
     # Resolve a current futures token using the same contract lookup as the verified quote.
@@ -211,6 +231,9 @@ async def _stream(client_factory: Callable[[], Any], quote_resolver: Callable[[]
                 # A reset/rollover is not interpreted as negative volume.
                 delta = max(0.0, current_volume - _last_cumulative_volume)
             if current_volume is not None:
+                # When the session volume resets, treat this tick as a new baseline.
+                if _last_cumulative_volume is not None and current_volume < _last_cumulative_volume:
+                    delta = 0.0
                 _last_cumulative_volume = current_volume
             await asyncio.to_thread(_write_tick, contract, expiry, epoch, price, delta)
             with _lock:
