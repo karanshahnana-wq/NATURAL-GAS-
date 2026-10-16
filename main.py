@@ -426,8 +426,12 @@ def kotak_quote_diagnostics():
             found = [name for name in aliases if name in present]
             normalized = {"ltp":"price", "volume":"volume", "vwap":"vwap",
                           "open_interest":"open_interest", "oi_change":"oi_change"}
+            if label == "depth":
+                mapped_available = quote.get("best_bid") is not None or quote.get("best_ask") is not None
+            else:
+                mapped_available = quote.get(normalized.get(label, "price")) is not None
             fields[label] = {"present_aliases": found,
-                             "mapped_value_available": quote.get(normalized.get(label, "price")) is not None}
+                             "mapped_value_available": mapped_available}
         return {"status": "connected", "contract": quote.get("contract"), "expiry": quote.get("expiry"),
                 "timestamp_utc": quote.get("timestamp_utc"), "field_diagnostics": fields,
                 "quote_field_names": present,
