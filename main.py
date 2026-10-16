@@ -451,7 +451,7 @@ def snapshot():
         "factor_assessment": factor_assessment,
         "opening_estimate": opening_estimate,
         "inputs": {
-            "mcx_price": "Kotak quote connected" if live_quote else "Demo only",
+            "mcx_price": "Kotak quote connected" if live_quote else "Live quote unavailable — no synthetic price",
             "previous_close_ohlc": "Kotak quote fields" if live_quote and previous_close is not None else "Not returned",
             "vwap_volume_oi": "Kotak quote fields" if live_quote and (vwap is not None or volume is not None or open_interest is not None) else "Not returned",
             "support_resistance": "Not calculated — historical candles required",
