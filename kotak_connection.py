@@ -82,11 +82,37 @@ def _totp_secret() -> str:
     return secret
 
 
+def _api_error_message(response: Any, stage: str) -> str | None:
+    """Translate broker auth errors into safe, actionable messages without echoing payloads."""
+    if not isinstance(response, dict):
+        return None
+    errors = response.get("error") or response.get("errors")
+    if not errors and response.get("status") != "error":
+        return None
+    items = errors if isinstance(errors, list) else [errors]
+    codes = []
+    messages = []
+    for item in items:
+        if isinstance(item, dict):
+            code = item.get("code")
+            message = item.get("message")
+            if code is not None:
+                codes.append(str(code).strip())
+            if isinstance(message, str):
+                messages.append(message.lower())
+    combined = " ".join(messages)
+    if "10508" in codes or "totp not registered" in combined:
+        return "Kotak says API TOTP is not registered for this user. Register/enable API TOTP in Kotak Neo, then update NEO_TOTP_SECRET in Render with that exact setup key."
+    if "10506" in codes or "invalid totp" in combined:
+        return "Kotak rejected the generated TOTP. Confirm NEO_TOTP_SECRET is the current API TOTP setup key (not a six-digit code), and that the registered mobile/UCC match."
+    if stage == "totp_login":
+        return "Kotak rejected API TOTP login. Verify API TOTP registration, registered mobile number, UCC, and the saved setup key."
+    return "Kotak rejected MPIN validation. Verify the Render NEO_MPIN value and that the account/API session is enabled."
+
+
 def _has_api_error(response: Any) -> bool:
     """Detect SDK responses that contain an API error even if no exception was raised."""
-    if not isinstance(response, dict):
-        return False
-    return bool(response.get("error") or response.get("errors") or response.get("status") == "error")
+    return _api_error_message(response, "unknown") is not None
 
 
 def _sdk_available() -> bool:
@@ -128,9 +154,11 @@ def create_authenticated_client() -> Any:
     totp = pyotp.TOTP(secret).now()
 
     login_response = client.totp_login(mobile_number=mobile, ucc=ucc, totp=totp)
-    if _has_api_error(login_response):
-        raise RuntimeError("Kotak rejected the TOTP login request. Verify registered mobile number and API credentials.")
+    login_error = _api_error_message(login_response, "totp_login")
+    if login_error:
+        raise RuntimeError(login_error)
     validate_response = client.totp_validate(mpin=_value("NEO_MPIN", "MPIN"))
-    if _has_api_error(validate_response):
-        raise RuntimeError("Kotak rejected the MPIN validation request. Verify MPIN and TOTP registration.")
+    validate_error = _api_error_message(validate_response, "totp_validate")
+    if validate_error:
+        raise RuntimeError(validate_error)
     return client
