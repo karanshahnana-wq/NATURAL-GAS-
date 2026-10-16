@@ -723,10 +723,19 @@ def api_kotak_options():
                 raw_puts = []
 
             def num(value):
+                # Broker numeric fields sometimes arrive as formatted strings (e.g. "6,91,250").
+                # Normalize separators without treating arbitrary text as a number.
                 try:
                     if value is not None and value != "":
-                        return float(value)
-                except (TypeError, ValueError):
+                        if isinstance(value, bool):
+                            return None
+                        if isinstance(value, str):
+                            value = value.strip().replace(",", "").replace(" ", "")
+                            if value.endswith("%"):
+                                value = value[:-1]
+                        parsed = float(value)
+                        return parsed if math.isfinite(parsed) else None
+                except (TypeError, ValueError, OverflowError):
                     pass
                 return None
 
@@ -832,11 +841,37 @@ def api_kotak_options():
                 return [{"strike": x["strike"], "oi": x["oi"]} for x in known[:5]]
 
             parsed_count = len(calls) + len(puts)
+            def safe_keys(rows):
+                keys = set()
+                for row in rows[:3]:
+                    if isinstance(row, dict):
+                        keys.update(str(k)[:80] for k in row.keys())
+                        for container_key in ("instrument", "inst", "quote", "openInterest", "open_interest", "oi"):
+                            child = row.get(container_key)
+                            if isinstance(child, dict):
+                                keys.update(f"{container_key}.{str(k)[:60]}" for k in child.keys())
+                return sorted(keys)[:80]
+            field_coverage = {
+                "call_strike": sum(x["strike"] is not None for x in calls),
+                "put_strike": sum(x["strike"] is not None for x in puts),
+                "call_oi": sum(x["oi"] is not None for x in calls),
+                "put_oi": sum(x["oi"] is not None for x in puts),
+                "call_volume": sum(x["volume"] is not None for x in calls),
+                "put_volume": sum(x["volume"] is not None for x in puts),
+                "iv": sum(x["iv"] is not None for x in calls + puts),
+                "oi_change": sum(x["oi_change"] is not None for x in calls + puts),
+            }
             result = {
                 "status": "connected" if parsed_count else "schema_unverified",
                 "source": "Kotak Neo", "underlying": "NATURALGAS",
                 "checked_at_utc": datetime.now(timezone.utc).isoformat(),
                 "options_rows_parsed": parsed_count, "synthetic": False,
+                "diagnostics": {
+                    "response_data_keys": sorted(str(k)[:80] for k in data.keys())[:80],
+                    "call_row_keys_sample": safe_keys(raw_calls),
+                    "put_row_keys_sample": safe_keys(raw_puts),
+                    "field_coverage": field_coverage,
+                },
                 "call_oi": call_oi, "put_oi": put_oi,
                 "pcr_oi": round(put_oi / call_oi, 4) if call_oi not in (None, 0) and put_oi is not None else None,
                 "call_volume": call_vol, "put_volume": put_vol,
