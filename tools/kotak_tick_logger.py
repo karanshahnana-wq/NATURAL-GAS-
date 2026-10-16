@@ -58,8 +58,15 @@ async def capture(minutes: float, output: Path, fmt: str):
         async with client.create_websocket() as ws:
             await ws.subscribe_scrips([WsToken(segment, token)])
             print(f"Subscribed to {contract.get('contract')} expiry={contract.get('expiry')} token={token}")
-            async for message in ws:
-                if time.monotonic() >= deadline:
+            iterator = ws.__aiter__()
+            while time.monotonic() < deadline:
+                try:
+                    message = await asyncio.wait_for(
+                        iterator.__anext__(), timeout=min(5.0, max(0.1, deadline - time.monotonic()))
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                except StopAsyncIteration:
                     break
                 if not isinstance(message, SFeedScrip):
                     continue
@@ -98,7 +105,7 @@ async def capture(minutes: float, output: Path, fmt: str):
                     "oi_change": attr(message, "oi_change", "open_int_change"),
                     "vwap_estimate": format(vwap, ".10g") if vwap is not None else None,
                     "vwap_note": "Approximation from LTP x cumulative-volume increments; not broker/exchange VWAP",
-                    "raw_tick_json": json.dumps({k: str(v) if v is not None else None for k, v in vars(message).items()},
+                    "raw_tick_json": json.dumps({k: str(v) if v is not None else None for k, v in getattr(message, "__dict__", {}).items()},
                                                 separators=(",", ":"), default=str)
                 }
                 if writer:
