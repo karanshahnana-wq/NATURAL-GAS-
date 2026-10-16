@@ -360,7 +360,7 @@ def _factor_assessment(live_quote, drivers):
 
 def snapshot():
     now = datetime.now(timezone.utc).isoformat()
-        kotak_status = connection_status()
+    kotak_status = connection_status()
     live_quote = None
     if kotak_status["configured"]:
         try:
