@@ -606,6 +606,50 @@ def api_candles(interval: str = "5m", limit: int = 300):
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@app.get("/api/indicators")
+def api_indicators(interval: str = "5m", limit: int = 300):
+    """Calculate transparent technical indicators only from stored real Kotak candles."""
+    if interval not in ("1m", "5m", "15m", "1h"):
+        raise HTTPException(status_code=400, detail="interval must be one of: 1m, 5m, 15m, 1h")
+    candles = get_candles(interval=interval, limit=max(limit, 60)).get("candles", [])
+    if not candles:
+        return {"status": "insufficient_data", "interval": interval, "count": 0,
+                "source": "Kotak Neo SFeed live ticks", "synthetic": False,
+                "message": "No verified live candles stored yet; indicators are not calculated."}
+    closes = [float(c["close"]) for c in candles]
+    highs = [float(c["high"]) for c in candles]
+    lows = [float(c["low"]) for c in candles]
+    def ema(values, period):
+        if len(values) < period:
+            return None
+        alpha = 2.0 / (period + 1)
+        result = sum(values[:period]) / period
+        for value in values[period:]:
+            result = alpha * value + (1-alpha) * result
+        return round(result, 4)
+    rsi = None
+    if len(closes) >= 15:
+        changes = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+        gains = [max(v, 0.0) for v in changes[-14:]]
+        losses = [max(-v, 0.0) for v in changes[-14:]]
+        avg_gain, avg_loss = sum(gains)/14, sum(losses)/14
+        rsi = 100.0 if avg_loss == 0 and avg_gain > 0 else (50.0 if avg_loss == 0 else round(100-(100/(1+avg_gain/avg_loss)), 2))
+    atr = None
+    if len(candles) >= 15:
+        true_ranges = []
+        for i in range(1, len(candles)):
+            true_ranges.append(max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])))
+        atr = round(sum(true_ranges[-14:])/14, 4)
+    enough = len(closes) >= 21
+    return {
+        "status": "calculated" if enough else "partial_data",
+        "interval": interval, "count": len(candles), "latest_candle_utc": candles[-1].get("updated_utc"),
+        "latest_close": closes[-1], "ema_9": ema(closes, 9), "ema_21": ema(closes, 21),
+        "rsi_14": rsi, "atr_14": atr,
+        "source": "Kotak Neo SFeed live ticks", "synthetic": False,
+        "warning": "Indicators are descriptive only; they are not a tested entry/exit strategy."
+    }
+
 @app.get("/api/history/status")
 def history_status():
     return {"status":"blocked_external_source_required",
