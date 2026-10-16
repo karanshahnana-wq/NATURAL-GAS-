@@ -727,9 +727,9 @@ def api_kotak_options():
             def parse_leg(row, option_type):
                 if not isinstance(row, dict):
                     return None
-                inst = row.get("instrument", {})
+                inst = row.get("instrument", row.get("inst", {}))
                 quote = row.get("quote", {})
-                oi_data = row.get("openInterest", {})
+                oi_data = row.get("openInterest", row.get("open_interest", row.get("oi", {})))
                 if not isinstance(inst, dict):
                     inst = {}
                 if not isinstance(quote, dict):
@@ -737,10 +737,10 @@ def api_kotak_options():
                 if not isinstance(oi_data, dict):
                     oi_data = {}
                 strike = num(inst.get("strikePrice", inst.get("strike_price", inst.get("strike"))))
-                oi = num(oi_data.get("current", oi_data.get("cur", row.get("open_interest"))))
-                volume = num(quote.get("volume", quote.get("vol", row.get("volume"))))
+                oi = num(oi_data.get("current", oi_data.get("cur", oi_data.get("oi", row.get("open_interest", row.get("oi"))))))
+                volume = num(quote.get("volume", quote.get("vol", row.get("volume", row.get("vol")))))
                 iv = num(row.get("iv", quote.get("iv", inst.get("iv"))))
-                oi_change = num(oi_data.get("change", oi_data.get("chg", row.get("oi_change"))))
+                oi_change = num(oi_data.get("change", oi_data.get("chg", oi_data.get("oi_change", row.get("oi_change")))))
                 return {
                     "type": option_type,
                     "strike": strike,
