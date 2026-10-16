@@ -7,6 +7,7 @@ is pointed at a persistent disk.
 from __future__ import annotations
 
 import asyncio
+from contextlib import closing
 import os
 import sqlite3
 import threading
@@ -69,7 +70,7 @@ def _write_tick(contract: str, expiry: str, epoch: float, price: float, volume_d
     global _last_cumulative_volume
     stamp = datetime.fromtimestamp(epoch, timezone.utc).isoformat()
     writes = 0
-    with _connect() as conn:
+    with closing(_connect()) as conn:
         for interval, seconds in _INTERVALS.items():
             bucket = int(epoch // seconds) * seconds
             row = conn.execute(
@@ -94,6 +95,7 @@ def _write_tick(contract: str, expiry: str, epoch: float, price: float, volume_d
                      volume_delta, 1, stamp),
                 )
             writes += 1
+        conn.commit()
     with _lock:
         _state["candles_written"] += writes
 
@@ -108,7 +110,7 @@ def get_status() -> dict[str, Any]:
         else "Default SQLite path is ephemeral on Render; set RADAR_CANDLE_DB_PATH to a mounted persistent disk before relying on history across deploys."
     )
     try:
-        with _connect() as conn:
+        with closing(_connect()) as conn:
             row = conn.execute("SELECT COUNT(*), MAX(updated_utc) FROM candles").fetchone()
         result["stored_candle_rows"] = row[0]
         result["last_candle_update_utc"] = row[1]
@@ -122,7 +124,7 @@ def get_candles(interval: str = "5m", limit: int = 300) -> dict[str, Any]:
     if interval not in _INTERVALS:
         raise ValueError("interval must be one of: 1m, 5m, 15m, 1h")
     limit = max(1, min(int(limit), 1000))
-    with _connect() as conn:
+    with closing(_connect()) as conn:
         rows = conn.execute(
             "SELECT contract, expiry, bucket_epoch, open, high, low, close, volume, tick_count, updated_utc "
             "FROM candles WHERE interval=? ORDER BY bucket_epoch DESC LIMIT ?",
