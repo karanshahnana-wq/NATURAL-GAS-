@@ -50,7 +50,39 @@ def _db_path() -> str:
     return os.getenv("RADAR_CANDLE_DB_PATH", "/tmp/natural_gas_candles.sqlite3")
 
 
-def _connect() -> sqlite3.Connection:
+class _PostgresConnection:
+    """Small adapter so existing tuple-based SQL works on SQLite and Postgres."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=()):
+        # All application queries use '?' placeholders; psycopg uses '%s'.
+        return self._conn.execute(sql.replace("?", "%s"), params)
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+
+def _connect():
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if database_url:
+        import psycopg
+        conn = psycopg.connect(database_url, connect_timeout=10)
+        wrapped = _PostgresConnection(conn)
+        wrapped.execute("""CREATE TABLE IF NOT EXISTS candles (
+            contract TEXT NOT NULL, expiry TEXT NOT NULL, interval TEXT NOT NULL,
+            bucket_epoch BIGINT NOT NULL, open DOUBLE PRECISION NOT NULL,
+            high DOUBLE PRECISION NOT NULL, low DOUBLE PRECISION NOT NULL,
+            close DOUBLE PRECISION NOT NULL, volume DOUBLE PRECISION NOT NULL DEFAULT 0,
+            tick_count BIGINT NOT NULL DEFAULT 0, updated_utc TEXT NOT NULL,
+            PRIMARY KEY(contract, expiry, interval, bucket_epoch)
+        )""")
+        wrapped.execute("CREATE INDEX IF NOT EXISTS idx_candles_time ON candles(interval, bucket_epoch)")
+        return wrapped
+
     path = _db_path()
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=10)
