@@ -803,9 +803,20 @@ def api_kotak_options():
 
 @app.get("/api/forecast")
 def api_forecast():
-    """Transparent short-horizon direction estimate from verified live MCX candles only."""
+    """Transparent short-horizon direction estimate from verified, fresh MCX candles only."""
+    feed = candle_status()
     candles = get_candles(interval="5m", limit=300).get("candles", [])
     candles = [c for c in candles if all(isinstance(c.get(k), (int, float)) for k in ("open", "high", "low", "close"))]
+    # Never publish a directional estimate from old candles just because the database
+    # still contains enough history. A connected socket alone is not proof of fresh ticks.
+    if not feed.get("data_fresh"):
+        return {"status":"stale_or_disconnected","direction":"WAIT — live MCX feed is not fresh",
+                "confidence_label":"Unavailable","score":None,"candle_count":len(candles),
+                "horizon":"Next 30–60 minutes","synthetic":False,
+                "latest_candle_utc":candles[-1].get("updated_utc") if candles else None,
+                "feed_status":feed.get("status"),"last_tick_utc":feed.get("last_tick_utc"),
+                "tick_age_seconds":feed.get("tick_age_seconds"),
+                "warning":"No directional estimate while verified MCX ticks are stale or disconnected. Refresh after the broker feed resumes."}
     if len(candles) < 30:
         return {"status":"insufficient_data","direction":"WAIT — insufficient verified candles",
                 "confidence_label":"Unavailable","score":None,"candle_count":len(candles),
