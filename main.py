@@ -724,6 +724,26 @@ def api_kotak_options():
                     pass
                 return None
 
+            def nested_value(obj, names):
+                """Find a named market-data field in broker-nested dictionaries without guessing values."""
+                wanted = {str(name).lower().replace("_", "").replace("-", "") for name in names}
+                if isinstance(obj, dict):
+                    for key, value in obj.items():
+                        if str(key).lower().replace("_", "").replace("-", "") in wanted and not isinstance(value, (dict, list)):
+                            parsed = num(value)
+                            if parsed is not None:
+                                return parsed
+                    for value in obj.values():
+                        found = nested_value(value, names)
+                        if found is not None:
+                            return found
+                elif isinstance(obj, list):
+                    for value in obj:
+                        found = nested_value(value, names)
+                        if found is not None:
+                            return found
+                return None
+
             def parse_leg(row, option_type):
                 if not isinstance(row, dict):
                     return None
@@ -737,10 +757,20 @@ def api_kotak_options():
                 if not isinstance(oi_data, dict):
                     oi_data = {}
                 strike = num(inst.get("strikePrice", inst.get("strike_price", inst.get("strike"))))
+                if strike is None:
+                    strike = nested_value(row, ("strikePrice", "strike_price", "strike", "strikeRate"))
                 oi = num(oi_data.get("current", oi_data.get("cur", oi_data.get("oi", row.get("open_interest", row.get("oi"))))))
+                if oi is None:
+                    oi = nested_value(row, ("openInterest", "open_interest", "oi", "openInt", "open_int", "opnInterest"))
                 volume = num(quote.get("volume", quote.get("vol", row.get("volume", row.get("vol")))))
+                if volume is None:
+                    volume = nested_value(row, ("volume", "vol", "tradedVolume", "tradeVolume"))
                 iv = num(row.get("iv", quote.get("iv", inst.get("iv"))))
+                if iv is None:
+                    iv = nested_value(row, ("iv", "impliedVolatility", "implied_volatility"))
                 oi_change = num(oi_data.get("change", oi_data.get("chg", oi_data.get("oi_change", row.get("oi_change")))))
+                if oi_change is None:
+                    oi_change = nested_value(row, ("oiChange", "oi_change", "changeInOI", "changeinopeninterest"))
                 return {
                     "type": option_type,
                     "strike": strike,
