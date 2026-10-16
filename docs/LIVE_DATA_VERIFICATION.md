@@ -37,11 +37,21 @@ python tools/analyze_mcx_history.py authorized_mcx_history.csv --output history_
 
 The report flags invalid OHLC, zero/negative volume, close-return outliers beyond three standard deviations, and calculates a first-pass calendar-date overnight-gap distribution. Verify session calendars, contract rollover, data adjustments, and outliers against the vendor before using results for risk decisions.
 
-## 4. Persistent SQLite storage on Render
+## 4. Event-driven backtest (research only)
+
+After obtaining and validating authorized MCX OHLCV data, run the basic EMA crossover research harness:
+
+```bash
+python tools/backtest_ema.py authorized_mcx_history.csv --fast 9 --slow 21 --quantity 1 --fee-per-unit-side 2.5 --slippage-bps 5 --output backtest_result.json
+```
+
+Replace quantity, per-side fees/taxes, and slippage with values appropriate to the exact contract and your broker. The script calculates a signal at candle close and executes no earlier than the next candle open, includes adverse per-side slippage and round-trip fees, and reports trade-level results. The example cost values are placeholders, not verified Kotak/MCX charges. It is not an optimized or validated strategy; test multiple market regimes and out-of-sample data before drawing conclusions.
+
+## 5. Persistent SQLite storage on Render
 
 The candle engine now enables SQLite WAL and uses a conflict-safe upsert. WAL improves concurrent access; it does not make an ephemeral filesystem persistent. Set RADAR_CANDLE_DB_PATH to a path on a mounted persistent Render disk (for example, /var/data/natural_gas_candles.sqlite3) and attach/configure that disk in Render before relying on history across deploys. A persistent disk can have a cost; confirm the plan and price in Render first.
 
-## 5. Limits
+## 6. Limits
 
 - The live capture requires Kotak market-data permissions, valid private environment variables, and market-hours access.
 - Some WebSocket messages may not contain OI or OI change. Missing broker fields are left blank; they are never fabricated.
