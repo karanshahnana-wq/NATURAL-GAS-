@@ -26,10 +26,36 @@ from main import get_live_mcx_quote
 
 def attr(obj, *names):
     for name in names:
-        value = getattr(obj, name, None)
+        try:
+            value = getattr(obj, name, None)
+        except Exception:
+            continue
         if value is not None:
             return value
     return None
+
+
+def tick_fields(message):
+    """Serialize public scalar tick fields even when the SDK uses __slots__."""
+    fields = {}
+    try:
+        source = vars(message)
+    except (TypeError, AttributeError):
+        source = {}
+    for name, value in source.items():
+        if name.startswith("_") or callable(value):
+            continue
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            fields[name] = value
+    for name in (
+        "instrument_token", "last_traded_price", "ltp", "last_trade_time",
+        "last_update_time", "volume_traded_today", "open_interest", "oi",
+        "oi_change", "open_int_change", "last_traded_quantity",
+    ):
+        value = attr(message, name)
+        if value is not None:
+            fields.setdefault(name, value)
+    return fields
 
 
 async def capture(minutes: float, output: Path, fmt: str):
@@ -79,7 +105,20 @@ async def capture(minutes: float, output: Path, fmt: str):
                     continue
                 if ltp <= 0:
                     continue
-                now = datetime.now(timezone.utc).isoformat()
+                tick_time = attr(message, "last_trade_time", "last_update_time")
+                if isinstance(tick_time, (int, float)):
+                    seconds = float(tick_time) / 1000 if float(tick_time) > 10_000_000_000 else float(tick_time)
+                    now = datetime.fromtimestamp(seconds, timezone.utc).isoformat()
+                elif isinstance(tick_time, str) and tick_time.strip():
+                    try:
+                        parsed = datetime.fromisoformat(tick_time.replace("Z", "+00:00"))
+                        if parsed.tzinfo is None:
+                            parsed = parsed.replace(tzinfo=timezone.utc)
+                        now = parsed.astimezone(timezone.utc).isoformat()
+                    except ValueError:
+                        now = datetime.now(timezone.utc).isoformat()
+                else:
+                    now = datetime.now(timezone.utc).isoformat()
                 cumulative_raw = attr(message, "volume_traded_today", "volume")
                 try:
                     cumulative = float(cumulative_raw) if cumulative_raw is not None else None
@@ -105,8 +144,7 @@ async def capture(minutes: float, output: Path, fmt: str):
                     "oi_change": attr(message, "oi_change", "open_int_change"),
                     "vwap_estimate": format(vwap, ".10g") if vwap is not None else None,
                     "vwap_note": "Approximation from LTP x cumulative-volume increments; not broker/exchange VWAP",
-                    "raw_tick_json": json.dumps({k: str(v) if v is not None else None for k, v in getattr(message, "__dict__", {}).items()},
-                                                separators=(",", ":"), default=str)
+                    "raw_tick_json": json.dumps(tick_fields(message), separators=(",", ":"), default=str)
                 }
                 if writer:
                     writer.writerow(raw)
@@ -117,6 +155,8 @@ async def capture(minutes: float, output: Path, fmt: str):
                 if count % 10 == 0:
                     print(f"{now} ltp={raw['ltp']} vol={cumulative_raw} oi={raw['open_interest']} ticks={count}")
     print(f"Capture ended. ticks={count} file={output.resolve()}")
+    if count == 0:
+        print("WARNING: No matching SFeed ticks were received. The file is not evidence of a working live feed.", file=sys.stderr)
 
 
 def main():
