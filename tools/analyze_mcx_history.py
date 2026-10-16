@@ -29,6 +29,20 @@ def analyze(rows):
             clean.append({"timestamp": stamp.isoformat(), "open": o, "high": h, "low": l, "close": c, "volume": v})
         except (KeyError, TypeError, ValueError):
             flags.append({"row": idx, "issue": "missing_or_invalid_fields"})
+    # Vendor exports can arrive newest-first or with rows out of order.
+    # Sort before return/gap calculations so results are chronological.
+    clean.sort(key=lambda row: row["timestamp"])
+    seen = set()
+    deduped = []
+    for row in clean:
+        key = row["timestamp"]
+        if key in seen:
+            flags.append({"issue": "duplicate_timestamp", "timestamp": key})
+            continue
+        seen.add(key)
+        deduped.append(row)
+    clean = deduped
+
     returns = []
     for i in range(1, len(clean)):
         prev, curr = clean[i-1], clean[i]
