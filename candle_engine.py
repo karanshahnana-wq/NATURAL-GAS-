@@ -66,6 +66,33 @@ def _utc_timestamp(value: Any) -> float:
     return time.time()
 
 
+def aggregate_tick_batch(ticks: list[dict[str, Any]], interval_seconds: int = 60) -> list[dict[str, Any]]:
+    """Pure OHLCV aggregator used by tests; bucket boundaries are UTC Unix-time based."""
+    if interval_seconds <= 0:
+        raise ValueError("interval_seconds must be positive")
+    buckets: dict[int, dict[str, Any]] = {}
+    for tick in ticks:
+        try:
+            epoch, price = float(tick["timestamp"]), float(tick["price"])
+            volume = max(0.0, float(tick.get("volume_delta", 0) or 0))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if epoch <= 0 or price <= 0:
+            continue
+        bucket = int(epoch // interval_seconds) * interval_seconds
+        candle = buckets.get(bucket)
+        if candle is None:
+            buckets[bucket] = {"bucket_epoch": bucket, "open": price, "high": price,
+                                "low": price, "close": price, "volume": volume, "tick_count": 1}
+        else:
+            candle["high"] = max(candle["high"], price)
+            candle["low"] = min(candle["low"], price)
+            candle["close"] = price
+            candle["volume"] += volume
+            candle["tick_count"] += 1
+    return [buckets[key] for key in sorted(buckets)]
+
+
 def _write_tick(contract: str, expiry: str, epoch: float, price: float, volume_delta: float) -> None:
     global _last_cumulative_volume
     stamp = datetime.fromtimestamp(epoch, timezone.utc).isoformat()
