@@ -29,6 +29,19 @@ _stop = threading.Event()
 _last_cumulative_volume: float | None = None
 
 
+def volume_delta(previous: float | None, current: float | None) -> tuple[float, float | None]:
+    """Return a non-negative cumulative-volume delta and the next baseline.
+
+    Missing readings keep the previous baseline; resets are treated as a new
+    baseline and never create a negative-volume candle.
+    """
+    if current is None:
+        return 0.0, previous
+    if previous is None or current < previous:
+        return 0.0, current
+    return current - previous, current
+
+
 def _db_path() -> str:
     return os.getenv("RADAR_CANDLE_DB_PATH", "/tmp/natural_gas_candles.sqlite3")
 
@@ -220,6 +233,9 @@ async def _stream(client_factory: Callable[[], Any], quote_resolver: Callable[[]
 async def _stream_once(client_factory: Callable[[], Any], quote_resolver: Callable[[], dict[str, Any]]) -> None:
     from neo_api_client.websocket.feed import WsToken, SFeedScrip
     global _last_cumulative_volume
+    # Each socket session starts with a fresh cumulative-volume baseline. A reconnect
+    # must not compare today's volume against a stale value from a previous contract/session.
+    _last_cumulative_volume = None
     # Resolve a current futures token using the same contract lookup as the verified quote.
     quote = await asyncio.to_thread(quote_resolver)
     segment = str(quote.get("exchange_segment") or "mcx_fo")
@@ -238,7 +254,15 @@ async def _stream_once(client_factory: Callable[[], Any], quote_resolver: Callab
         with _lock:
             _state.update(status="connected_waiting_for_ticks", connected=True,
                           message="WebSocket subscribed; waiting for genuine MCX tick updates.")
-        async for message in ws:
+        iterator = ws.__aiter__()
+        while not _stop.is_set():
+            try:
+                # Detect a dead/stalled socket even when it never raises an error.
+                message = await asyncio.wait_for(iterator.__anext__(), timeout=45.0)
+            except asyncio.TimeoutError as exc:
+                raise ConnectionError("No Kotak SFeed message received for 45 seconds.") from exc
+            except StopAsyncIteration:
+                break
             if _stop.is_set():
                 break
             if not isinstance(message, SFeedScrip):
@@ -255,19 +279,11 @@ async def _stream_once(client_factory: Callable[[], Any], quote_resolver: Callab
             epoch = _utc_timestamp(getattr(message, "last_trade_time", None) or
                                    getattr(message, "last_update_time", None))
             cumulative = getattr(message, "volume_traded_today", None)
-            delta = 0.0
             try:
                 current_volume = float(cumulative) if cumulative is not None else None
             except (TypeError, ValueError):
                 current_volume = None
-            if current_volume is not None and _last_cumulative_volume is not None:
-                # A reset/rollover is not interpreted as negative volume.
-                delta = max(0.0, current_volume - _last_cumulative_volume)
-            if current_volume is not None:
-                # When the session volume resets, treat this tick as a new baseline.
-                if _last_cumulative_volume is not None and current_volume < _last_cumulative_volume:
-                    delta = 0.0
-                _last_cumulative_volume = current_volume
+            delta, _last_cumulative_volume = volume_delta(_last_cumulative_volume, current_volume)
             await asyncio.to_thread(_write_tick, contract, expiry, epoch, price, delta)
             with _lock:
                 _state.update(status="collecting", connected=True,
