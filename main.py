@@ -731,14 +731,42 @@ def api_kotak_options():
                 return None
 
             def nested_value(obj, names):
-                """Find a named market-data field in broker-nested dictionaries without guessing values."""
+                """Find a named numeric market field, including broker wrappers like {'openInterest': {'current': 123}}."""
                 wanted = {str(name).lower().replace("_", "").replace("-", "") for name in names}
+                preferred = ("current", "cur", "value", "currentvalue", "currentoi", "openinterest", "openint", "oi", "qty", "quantity")
+
+                def normalized(key):
+                    return str(key).lower().replace("_", "").replace("-", "").replace(" ", "")
+
+                def numeric_leaf(value):
+                    parsed = num(value)
+                    if parsed is not None:
+                        return parsed
+                    if isinstance(value, dict):
+                        # Prefer explicitly current/latest values over previous/change fields.
+                        for key in preferred:
+                            for actual_key, child in value.items():
+                                if normalized(actual_key) == key:
+                                    found = numeric_leaf(child)
+                                    if found is not None:
+                                        return found
+                        for child in value.values():
+                            found = numeric_leaf(child)
+                            if found is not None:
+                                return found
+                    elif isinstance(value, list):
+                        for child in value:
+                            found = numeric_leaf(child)
+                            if found is not None:
+                                return found
+                    return None
+
                 if isinstance(obj, dict):
                     for key, value in obj.items():
-                        if str(key).lower().replace("_", "").replace("-", "") in wanted and not isinstance(value, (dict, list)):
-                            parsed = num(value)
-                            if parsed is not None:
-                                return parsed
+                        if normalized(key) in wanted:
+                            found = numeric_leaf(value)
+                            if found is not None:
+                                return found
                     for value in obj.values():
                         found = nested_value(value, names)
                         if found is not None:
