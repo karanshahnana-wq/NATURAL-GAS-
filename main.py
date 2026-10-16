@@ -271,92 +271,126 @@ def _global_drivers():
 
 
 def _factor_assessment(live_quote, drivers):
-    """Transparent directional context from available observations; never a trade signal."""
+    """Expose the full ten-factor framework while scoring only evidence-backed inputs."""
     factors = []
-    def add(name, direction, weight, evidence, source, available=True):
-        factors.append({"factor": name, "direction": direction if available else "unavailable",
-                        "weight": weight if available else 0, "evidence": evidence,
-                        "source": source, "available": bool(available)})
-    # MCX's own quote has the highest weight, but one quote is not a trend.
+
+    def add(name, direction, weight, evidence, source, available=True, status=None):
+        factors.append({
+            "factor": name,
+            "direction": direction if available else "unavailable",
+            "weight": float(weight) if available else 0.0,
+            "evidence": evidence,
+            "source": source,
+            "available": bool(available),
+            "status": status or ("available" if available else "not_connected"),
+        })
+
+    # 1. MCX session price action: a quote is context, not a trend by itself.
     opened = live_quote.get("day_open") if live_quote else None
     price = live_quote.get("price") if live_quote else None
-    if isinstance(opened, (int, float)) and isinstance(price, (int, float)) and opened:
+    if isinstance(opened, (int, float)) and isinstance(price, (int, float)) and opened > 0:
         pct = (price / opened - 1) * 100
         direction = "bullish" if pct > 0.15 else "bearish" if pct < -0.15 else "neutral"
         add("MCX price vs session open", direction, 2 if direction != "neutral" else 0,
             f"Price {price:.2f}; open {opened:.2f}; {pct:+.2f}%",
-            "Kotak Neo live quote")
+            "Kotak Neo quote")
     else:
         add("MCX price vs session open", "unavailable", 0,
-            "Kotak quote did not provide both last price and session open", "Kotak Neo", False)
+            "A verified price and session open are both required", "Kotak Neo", False)
 
+    # 2. Henry Hub reference price. Public reference may be delayed.
     hh = drivers.get("henry_hub_reference") if isinstance(drivers, dict) else None
     if hh and isinstance(hh.get("change_pct"), (int, float)):
         v = float(hh["change_pct"])
         direction = "bullish" if v > 0.25 else "bearish" if v < -0.25 else "neutral"
-        add("Henry Hub daily reference move", direction, 1 if direction != "neutral" else 0,
-            f"Reference move {v:+.2f}%", hh.get("source", "Yahoo Finance reference"))
+        add("Henry Hub reference move", direction, 1 if direction != "neutral" else 0,
+            f"Reference move {v:+.2f}%; check timestamp and contract context",
+            hh.get("source", "Public reference feed"))
     else:
-        add("Henry Hub daily reference move", "unavailable", 0, "Reference quote unavailable", "Yahoo Finance", False)
+        add("Henry Hub reference move", "unavailable", 0,
+            "No verified current reference quote", "Public reference feed", False)
 
-    crude = drivers.get("crude_oil_reference") if isinstance(drivers, dict) else None
-    if crude and isinstance(crude.get("change_pct"), (int, float)):
-        v = float(crude["change_pct"])
-        # Crude is only a broad energy/risk context factor, not a direct gas driver.
-        direction = "bullish" if v > 1 else "bearish" if v < -1 else "neutral"
-        add("Crude oil (weak cross-commodity context)", direction, 0.5 if direction != "neutral" else 0,
-            f"WTI reference move {v:+.2f}%; low relevance to gas", crude.get("source", "Yahoo Finance reference"))
-    else:
-        add("Crude oil (weak cross-commodity context)", "unavailable", 0, "Reference quote unavailable", "Yahoo Finance", False)
-
-    fx = drivers.get("usd_inr_reference") if isinstance(drivers, dict) else None
-    if fx and isinstance(fx.get("change_pct"), (int, float)):
-        v = float(fx["change_pct"])
-        # A stronger USD raises rupee import cost, but does not determine the MCX futures direction.
-        direction = "bullish" if v > 0.15 else "bearish" if v < -0.15 else "neutral"
-        add("USD/INR (rupee-cost context)", direction, 0.5 if direction != "neutral" else 0,
-            f"USD/INR reference move {v:+.2f}%; indirect cost factor", fx.get("source", "Yahoo Finance reference"))
-    else:
-        add("USD/INR (rupee-cost context)", "unavailable", 0, "Reference quote unavailable", "Yahoo Finance", False)
-
+    # 3. EIA storage. Do not manufacture a surprise without verified consensus/seasonal norm.
     eia = drivers.get("eia_storage") if isinstance(drivers, dict) else None
     if eia and eia.get("status") == "connected" and isinstance(eia.get("weekly_change_bcf"), (int, float)):
-        # Without the five-year seasonal norm and a verified consensus, storage change alone is not directional.
         add("EIA weekly storage", "context_only", 0,
-            f"Weekly change {eia['weekly_change_bcf']:+.1f} Bcf; no verified consensus/seasonal benchmark",
-            eia.get("source", "U.S. EIA"))
+            f"Report period {eia.get('period')}; weekly change {eia['weekly_change_bcf']:+.1f} Bcf; consensus/seasonal benchmark not connected",
+            eia.get("source", "U.S. EIA"), True, "context_only")
     else:
         add("EIA weekly storage", "unavailable", 0,
-            "No verified current EIA series in the app; do not infer a surprise", "U.S. EIA", False)
+            "Official current series unavailable; no storage surprise inferred", "U.S. EIA", False)
 
+    # 4. Weather proxy; Gulf-area minimum temperature is not a full US HDD/CDD model.
     weather = drivers.get("us_gulf_weather") if isinstance(drivers, dict) else None
-    if weather and weather.get("min_f"):
-        mins = [v for v in weather.get("min_f", []) if isinstance(v, (int, float))]
-        if len(mins) >= 2:
-            delta = mins[-1] - mins[0]
-            # Gulf-area temperatures affect local demand less directly than broad US heating/cooling degree days.
-            direction = "bullish" if delta <= -8 else "bearish" if delta >= 8 else "neutral"
-            add("US Gulf 3-day minimum temperature", direction, 0.5 if direction != "neutral" else 0,
-                f"Forecast minimum changes {delta:+.1f}°F across 3 days; regional proxy only",
-                weather.get("source", "Open-Meteo"))
-        else:
-            add("US Gulf 3-day minimum temperature", "unavailable", 0, "Forecast temperatures incomplete", "Open-Meteo", False)
+    mins = [v for v in (weather or {}).get("min_f", []) if isinstance(v, (int, float))]
+    if len(mins) >= 2:
+        delta = mins[-1] - mins[0]
+        direction = "bullish" if delta <= -8 else "bearish" if delta >= 8 else "neutral"
+        add("US Gulf weather proxy", direction, 0.5 if direction != "neutral" else 0,
+            f"Three-day minimum-temperature change {delta:+.1f}°F; regional proxy only",
+            weather.get("source", "Open-Meteo"), True, "low_relevance_proxy")
     else:
-        add("US Gulf 3-day minimum temperature", "unavailable", 0, "Weather forecast unavailable", "Open-Meteo", False)
+        add("US Gulf weather proxy", "unavailable", 0,
+            "Forecast temperature series unavailable or incomplete", "Open-Meteo", False)
 
-    available = [f for f in factors if f["available"] and f["weight"]]
-    score = round(sum(f["weight"] if f["direction"] == "bullish" else -f["weight"] if f["direction"] == "bearish" else 0 for f in available), 2)
-    total_weight = round(sum(f["weight"] for f in available), 2)
-    label = "Mixed / insufficient edge"
+    # 5–9. These require dedicated, timestamped source integrations.
+    add("LNG exports and terminal flows", "unavailable", 0,
+        "No verified current LNG feed connected; no directional assumption", "LNG terminal/export feed", False)
+    add("US dry gas production", "unavailable", 0,
+        "No verified current production observation connected", "EIA / authorized production feed", False)
+    add("Pipeline flows and outages", "unavailable", 0,
+        "No verified pipeline nominations, flows, or outage feed connected", "Pipeline operator / authorized feed", False)
+    add("US demand and power burn", "unavailable", 0,
+        "No verified demand/power-burn series connected", "EIA / authorized demand feed", False)
+    add("CFTC positioning and seasonality", "unavailable", 0,
+        "Positioning and historical seasonal percentile are not connected; no estimate fabricated", "CFTC / verified historical dataset", False)
+
+    # 10. Technical trend from genuine stored Kotak SFeed candles only.
+    try:
+        candle_result = get_candles(interval="5m", limit=30)
+        closes = [float(c["close"]) for c in candle_result.get("candles", [])
+                  if isinstance(c.get("close"), (int, float)) and c["close"] > 0]
+    except Exception:
+        closes = []
+    if len(closes) >= 21:
+        def ema(values, period):
+            alpha = 2 / (period + 1)
+            value = values[0]
+            for item in values[1:]:
+                value = alpha * item + (1 - alpha) * value
+            return value
+        ema9, ema21 = ema(closes[-min(len(closes), 27):], 9), ema(closes[-min(len(closes), 63):], 21)
+        last = closes[-1]
+        direction = "bullish" if last > ema9 > ema21 else "bearish" if last < ema9 < ema21 else "neutral"
+        add("MCX verified 5-minute technical trend", direction, 1 if direction != "neutral" else 0,
+            f"Last close {last:.2f}; EMA9 {ema9:.2f}; EMA21 {ema21:.2f}; {len(closes)} stored candles",
+            "Kotak Neo SFeed stored candles", True, "descriptive_not_backtested")
+    else:
+        add("MCX verified 5-minute technical trend", "unavailable", 0,
+            f"Need at least 21 genuine stored 5-minute closes; found {len(closes)}",
+            "Kotak Neo SFeed stored candles", False)
+
+    directional = [f for f in factors if f["available"] and f["weight"] > 0
+                   and f["direction"] in ("bullish", "bearish", "neutral")]
+    score = round(sum(f["weight"] if f["direction"] == "bullish"
+                      else -f["weight"] if f["direction"] == "bearish" else 0
+                      for f in directional), 2)
+    total_weight = round(sum(f["weight"] for f in directional), 2)
+    label = "WAIT — insufficient verified directional inputs"
     if total_weight >= 2 and score >= 1.5:
         label = "Bullish context — not a trade signal"
     elif total_weight >= 2 and score <= -1.5:
         label = "Bearish context — not a trade signal"
-    return {"status": "context_only" if total_weight else "insufficient_data",
-            "label": label, "score": score, "available_weight": total_weight,
-            "factors": factors,
-            "warning": "Directional context only. Factors have different relevance and update times; this is not a backtested MCX entry/exit strategy."}
-
+    return {
+        "status": "context_only" if total_weight else "insufficient_data",
+        "label": label,
+        "score": score,
+        "available_weight": total_weight,
+        "available_factors": sum(1 for f in factors if f["available"]),
+        "total_factors": 10,
+        "factors": factors,
+        "warning": "Ten-factor checklist is visible, but only verified inputs contribute to context. Missing feeds are not guessed. This is not a backtested MCX entry/exit strategy.",
+    }
 
 def snapshot():
     now = datetime.now(timezone.utc).isoformat()
