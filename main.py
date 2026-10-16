@@ -4,6 +4,7 @@ import os, math, time
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from kotak_connection import connection_status, create_authenticated_client
+from candle_engine import start_collector, get_status as candle_status, get_candles
 
 app = FastAPI(title="MCX Natural Gas Radar", version="0.4.0")
 DEMO_MODE = os.getenv("RADAR_DEMO_MODE", "true").lower() == "true"
@@ -98,6 +99,7 @@ def get_live_mcx_quote():
     best_bid = buy_rows[0] if isinstance(buy_rows, list) and buy_rows and isinstance(buy_rows[0], dict) else {}
     best_ask = sell_rows[0] if isinstance(sell_rows, list) and sell_rows and isinstance(sell_rows[0], dict) else {}
     result = {"price": number(ltp), "contract": symbol or neo_symbol, "expiry": expiry,
+              "exchange_segment": segment, "instrument_token": token,
               "timestamp_utc": datetime.now(timezone.utc).isoformat(), "live_quote": True,
               "previous_close": number(ohlc.get("close")), "day_open": number(ohlc.get("open")),
               "day_high": number(ohlc.get("high")), "day_low": number(ohlc.get("low")),
@@ -472,6 +474,27 @@ def kotak_mcx_test():
 def api_drivers():
     """Public reference drivers with source/time metadata; no trade recommendations."""
     return _global_drivers()
+
+
+@app.on_event("startup")
+def start_live_candle_collection():
+    """Start live tick collection when Kotak credentials are configured."""
+    status = connection_status()
+    if status.get("configured") and status.get("sdk_available"):
+        start_collector(create_authenticated_client, get_live_mcx_quote)
+
+
+@app.get("/api/candles/status")
+def api_candles_status():
+    return candle_status()
+
+
+@app.get("/api/candles")
+def api_candles(interval: str = "5m", limit: int = 300):
+    try:
+        return get_candles(interval=interval, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/api/history/status")
