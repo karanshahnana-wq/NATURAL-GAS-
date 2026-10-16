@@ -149,6 +149,23 @@ def _write_tick(contract: str, expiry: str, epoch: float, price: float, volume_d
 def get_status() -> dict[str, Any]:
     with _lock:
         result = dict(_state)
+    # A successful subscription is not proof of a functioning market-data feed.
+    # Report stale ticks explicitly so the UI cannot confuse an idle socket with live data.
+    last_tick = result.get("last_tick_utc")
+    tick_age_seconds = None
+    if last_tick:
+        try:
+            last_dt = datetime.fromisoformat(str(last_tick).replace("Z", "+00:00"))
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
+            tick_age_seconds = max(0.0, (datetime.now(timezone.utc) - last_dt.astimezone(timezone.utc)).total_seconds())
+        except (TypeError, ValueError):
+            tick_age_seconds = None
+    result["tick_age_seconds"] = round(tick_age_seconds, 1) if tick_age_seconds is not None else None
+    result["data_fresh"] = tick_age_seconds is not None and tick_age_seconds <= 120
+    if result.get("connected") and not result["data_fresh"]:
+        result["status"] = "stale"
+        result["message"] = "WebSocket may be connected, but no recent valid MCX tick was received; verify market session and broker feed."
     result["database_path_configured"] = bool(os.getenv("RADAR_CANDLE_DB_PATH"))
     result["storage_note"] = (
         "Custom database path configured; confirm it points to persistent storage."
