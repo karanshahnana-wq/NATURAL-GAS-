@@ -547,7 +547,13 @@ def _safe_kotak_error(exc: Exception) -> dict:
         hint = str(exc).lower()
     except Exception:
         hint = ""
-    if status == 429 or "rate limit" in hint or "too many requests" in hint:
+    if "totp is not registered" in hint or "totp not registered" in hint:
+        category, message = "totp_not_registered", "Kotak says API TOTP is not registered. Register/enable API TOTP in Kotak Neo, then save that exact setup key in Render as NEO_TOTP_SECRET."
+    elif "rejected the generated totp" in hint or "invalid totp" in hint:
+        category, message = "invalid_totp", "Kotak rejected the generated TOTP. Check that Render's NEO_TOTP_SECRET is the current API setup key, not a six-digit code, and confirm the registered mobile/UCC."
+    elif "rejected mpin validation" in hint:
+        category, message = "mpin_rejected", "Kotak rejected MPIN validation. Verify NEO_MPIN in Render and confirm API login is enabled."
+    elif status == 429 or "rate limit" in hint or "too many requests" in hint:
         category, message = "rate_limited", "Kotak rate-limited the request. Wait before retrying."
     elif status in (401, 403) or "unauthorized" in hint or "forbidden" in hint:
         category, message = "auth_or_permission", "Kotak rejected access. Check API access, consumer key, and account permissions."
