@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import closing
 import os
+import logging
 import sqlite3
 import threading
 import time
@@ -17,12 +18,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 _INTERVALS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
+_logger = logging.getLogger("mcx_candle_collector")
 _lock = threading.RLock()
 _state: dict[str, Any] = {
     "enabled": False, "status": "not_started", "message": "Collector has not started.",
     "connected": False, "contract": None, "expiry": None, "instrument_token": None,
     "exchange_segment": None, "last_tick_utc": None, "last_error": None,
     "ticks_received": 0, "candles_written": 0, "started_at": None,
+    "collector_attempts": 0, "messages_received": 0, "ignored_messages": 0,
+    "last_message_type": None, "last_matching_tick_utc": None,
 }
 _thread: threading.Thread | None = None
 _stop = threading.Event()
@@ -211,7 +215,10 @@ def start_collector(client_factory: Callable[[], Any], quote_resolver: Callable[
     _stop.clear()
     with _lock:
         _state.update(enabled=True, status="starting", message="Preparing authenticated MCX futures feed.",
-                      started_at=datetime.now(timezone.utc).isoformat(), last_error=None)
+                      started_at=datetime.now(timezone.utc).isoformat(), last_error=None,
+                      collector_attempts=0, messages_received=0, ignored_messages=0,
+                      last_message_type=None, last_matching_tick_utc=None)
+    _logger.info("MCX candle collector thread starting")
     _thread = threading.Thread(target=_thread_main, args=(client_factory, quote_resolver),
                                name="mcx-candle-collector", daemon=True)
     _thread.start()
@@ -221,6 +228,7 @@ def _thread_main(client_factory: Callable[[], Any], quote_resolver: Callable[[],
     try:
         asyncio.run(_stream(client_factory, quote_resolver))
     except Exception as exc:
+        _logger.exception("MCX candle collector stopped unexpectedly")
         with _lock:
             _state.update(connected=False, status="error",
                           message="Live candle collector stopped before receiving data.",
@@ -237,10 +245,11 @@ async def _stream(client_factory: Callable[[], Any], quote_resolver: Callable[[]
                 return
             raise ConnectionError("Kotak SFeed stream ended.")
         except Exception as exc:
+            _logger.warning("MCX SFeed disconnected; retrying (%s)", type(exc).__name__)
             with _lock:
                 _state.update(connected=False, status="reconnecting",
                               message="Live feed disconnected; collector will retry automatically.",
-                              last_error=type(exc).__name__)
+                              last_error=type(exc).__name__, collector_attempts=_state["collector_attempts"] + 1)
             if _stop.is_set():
                 return
             await asyncio.sleep(backoff)
@@ -262,12 +271,14 @@ async def _stream_once(client_factory: Callable[[], Any], quote_resolver: Callab
     if not token:
         raise RuntimeError("Kotak quote resolver did not expose an instrument token.")
     client = await asyncio.to_thread(client_factory)
+    _logger.info("Resolved MCX stream contract=%s expiry=%s segment=%s token_present=%s", contract, expiry, segment, bool(token))
     with _lock:
         _state.update(status="connecting", connected=False, contract=contract, expiry=expiry,
                       instrument_token=token, exchange_segment=segment,
                       message="Contract resolved; connecting to Kotak SFeed.")
     async with client.create_websocket() as ws:
         await ws.subscribe_scrips([WsToken(segment, token)])
+        _logger.info("Subscribed to Kotak SFeed for contract=%s; waiting for ticks", contract)
         with _lock:
             _state.update(status="connected_waiting_for_ticks", connected=True,
                           message="WebSocket subscribed; waiting for genuine MCX tick updates.")
@@ -282,9 +293,17 @@ async def _stream_once(client_factory: Callable[[], Any], quote_resolver: Callab
                 break
             if _stop.is_set():
                 break
+            message_type = type(message).__name__
+            with _lock:
+                _state["messages_received"] += 1
+                _state["last_message_type"] = message_type
             if not isinstance(message, SFeedScrip):
+                with _lock:
+                    _state["ignored_messages"] += 1
                 continue
             if str(getattr(message, "instrument_token", "")) != token:
+                with _lock:
+                    _state["ignored_messages"] += 1
                 continue
             raw_price = getattr(message, "last_traded_price", None)
             try:
@@ -292,6 +311,8 @@ async def _stream_once(client_factory: Callable[[], Any], quote_resolver: Callab
             except (TypeError, ValueError):
                 continue
             if price <= 0:
+                with _lock:
+                    _state["ignored_messages"] += 1
                 continue
             epoch = _utc_timestamp(getattr(message, "last_trade_time", None) or
                                    getattr(message, "last_update_time", None))
@@ -302,8 +323,10 @@ async def _stream_once(client_factory: Callable[[], Any], quote_resolver: Callab
                 current_volume = None
             delta, _last_cumulative_volume = volume_delta(_last_cumulative_volume, current_volume)
             await asyncio.to_thread(_write_tick, contract, expiry, epoch, price, delta)
+            _logger.debug("Accepted MCX SFeed tick contract=%s price=%s", contract, price)
             with _lock:
                 _state.update(status="collecting", connected=True,
                               message="Receiving genuine Kotak SFeed ticks and updating candles.",
                               last_tick_utc=datetime.fromtimestamp(epoch, timezone.utc).isoformat(),
-                              ticks_received=_state["ticks_received"] + 1, last_error=None)
+                              ticks_received=_state["ticks_received"] + 1, last_error=None,
+                              last_matching_tick_utc=datetime.fromtimestamp(epoch, timezone.utc).isoformat())
