@@ -1068,6 +1068,52 @@ def api_forecast():
             "latest_candle_utc":candles[-1].get("updated_utc"),"synthetic":False,
             "warning":"Unvalidated heuristic, not a calibrated probability or proven strategy. Directional context only; avoid entries if data is stale."}
 
+@app.get("/api/health/diagnostics")
+def api_health_diagnostics():
+    """Safe operational diagnostics; never expose credentials or raw broker payloads."""
+    feed = candle_status()
+    drivers = _global_drivers()
+    configured = connection_status()
+    return {
+        "status": "degraded" if not feed.get("data_fresh") else "ok",
+        "checked_at_utc": datetime.now(timezone.utc).isoformat(),
+        "app_version": app.version,
+        "kotak": {
+            "configured": bool(configured.get("configured")),
+            "sdk_available": bool(configured.get("sdk_available")),
+            "feed_status": feed.get("status"),
+            "connected": bool(feed.get("connected")),
+            "data_fresh": bool(feed.get("data_fresh")),
+            "last_tick_utc": feed.get("last_tick_utc"),
+            "tick_age_seconds": feed.get("tick_age_seconds"),
+            "last_error": feed.get("last_error"),
+        },
+        "storage": {
+            "mode": "postgres" if os.getenv("DATABASE_URL", "").strip() else "sqlite",
+            "persistent_path_configured": bool(os.getenv("RADAR_CANDLE_DB_PATH", "").strip()),
+            "note": "SQLite on ephemeral hosting may lose data after restart; configure persistent storage or DATABASE_URL."
+        },
+        "macro_sources": drivers.get("source_status", {}),
+        "news": {
+            "status": (drivers.get("news") or {}).get("status"),
+            "fresh_count": (drivers.get("news") or {}).get("fresh_count", 0),
+            "x_posts_status": "not_connected",
+            "note": "X post text requires authorized access; account links are not collected posts."
+        },
+        "trading_signals": {
+            "validated": False,
+            "status": "research_only",
+            "note": "No signal should be treated as validated until historical backtesting and forward paper-trading criteria pass."
+        }
+    }
+
+
+@app.get("/api/health")
+def api_health():
+    """Simple liveness endpoint for uptime monitoring."""
+    return {"status": "ok", "timestamp_utc": datetime.now(timezone.utc).isoformat(), "version": app.version}
+
+
 @app.on_event("startup")
 def start_live_candle_collection():
     """Start live tick collection when Kotak credentials are configured."""
