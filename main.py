@@ -11,6 +11,7 @@ from kotak_connection import connection_status, create_authenticated_client
 from candle_engine import start_collector, get_status as candle_status, get_candles
 from x_radar import router as x_radar_router
 from options_schema import extract_option_sides
+from persistent_store import get_json as get_persisted_json, put_json as put_persisted_json
 
 app = FastAPI(title="MCX Natural Gas Radar", version="0.5.0")
 app.include_router(x_radar_router)
@@ -340,6 +341,34 @@ def _global_drivers():
         "mcx_historical": {"status":"unavailable_from_kotak_api",
             "note":"Kotak Neo historical-data docs exclude MCX futures; use an authorized MCX historical-data provider for research-grade candles."}
     }
+    # Durable fallback: if a provider is down after a restart, retain the last successful
+    # snapshot but mark it stale rather than making the entire panel blank.
+    try:
+        previous = get_persisted_json("global_drivers")
+        old = previous.get("payload") if previous else None
+        if isinstance(old, dict):
+            for key in ("henry_hub_reference", "crude_oil_reference", "usd_inr_reference", "us_gulf_weather"):
+                current_value = result.get(key)
+                old_value = old.get(key)
+                if current_value is None and isinstance(old_value, dict):
+                    result[key] = {**old_value, "status": "stale",
+                                   "freshness": "stale",
+                                   "last_error": "Current feed unavailable; retained last successful persistent snapshot.",
+                                   "persisted_updated_utc": previous.get("updated_utc")}
+            old_status = old.get("source_status", {})
+            for key, record in (result.get("source_status") or {}).items():
+                if record.get("status") in ("unavailable", "feed_unavailable", "api_key_required"):
+                    old_record = old_status.get(key, {}) if isinstance(old_status, dict) else {}
+                    if old_record:
+                        result["source_status"][key] = {**old_record, "status": "stale",
+                            "freshness": "stale", "last_error": record.get("note", "Current feed unavailable")}
+        put_persisted_json("global_drivers", result)
+    except Exception as exc:
+        # Cache failure must never break the main dashboard.
+        result["persistent_cache"] = {"status": "unavailable", "error_type": type(exc).__name__}
+    else:
+        result["persistent_cache"] = {"status": "saved" if os.getenv("DATABASE_URL") else "local_only",
+                                      "note": "DATABASE_URL is needed for durable storage across Render restarts."}
     _driver_cache["checked_at"], _driver_cache["data"] = now, result
     return result
 
