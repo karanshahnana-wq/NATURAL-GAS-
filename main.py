@@ -618,6 +618,28 @@ def snapshot():
 @app.get("/", response_class=HTMLResponse)
 def home(): return HTMLResponse(PAGE)
 
+@app.post("/api/ingest/refresh")
+def api_ingest_refresh(request: Request):
+    """Scheduled refresh endpoint for public macro/news sources; requires a shared token."""
+    import secrets
+    expected = os.getenv("RADAR_INGEST_TOKEN", "").strip()
+    supplied = request.headers.get("authorization", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="Set RADAR_INGEST_TOKEN in Render and GitHub Actions before enabling scheduled refresh.")
+    if not secrets.compare_digest(supplied, "Bearer " + expected):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    _driver_cache["checked_at"] = 0.0
+    drivers = _global_drivers()
+    return {
+        "status": "refreshed",
+        "checked_at_utc": datetime.now(timezone.utc).isoformat(),
+        "source_status": drivers.get("source_status", {}),
+        "news_count": len((drivers.get("news") or {}).get("items", [])),
+        "persistent_cache": drivers.get("persistent_cache", {}),
+        "note": "Refresh covers configured public sources only. EIA requires EIA_API_KEY; X post collection requires authorized X access."
+    }
+
+
 @app.get("/api/health")
 def health():
     """Report actual runtime readiness instead of a permanently hard-coded demo flag."""
