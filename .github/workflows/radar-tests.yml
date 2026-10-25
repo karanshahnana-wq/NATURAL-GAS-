@@ -4,6 +4,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: '*/30 * * * *'
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
@@ -18,3 +20,19 @@ jobs:
         run: python -m compileall -q main.py candle_engine.py kotak_connection.py x_radar.py options_schema.py
       - name: Run regression tests
         run: python -m unittest discover -s tests -v
+
+  scheduled-public-feed-refresh:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refresh cached macro and news feeds
+        env:
+          RADAR_INGEST_TOKEN: ${{ secrets.RADAR_INGEST_TOKEN }}
+        run: |
+          if [ -z "$RADAR_INGEST_TOKEN" ]; then
+            echo "RADAR_INGEST_TOKEN secret is not configured; skipping scheduled refresh."
+            exit 0
+          fi
+          curl --fail --silent --show-error --max-time 20 \
+            -X POST "https://natural-gas-radar.onrender.com/api/ingest/refresh" \
+            -H "Authorization: Bearer $RADAR_INGEST_TOKEN"
