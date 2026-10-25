@@ -835,11 +835,9 @@ def api_kotak_options():
                 "diagnostics": ["broker_error_or_unexpected_response"],
             }
         else:
-            data = response.get("data", response)
+            data, raw_calls, raw_puts, schema_check = extract_option_sides(response)
             if not isinstance(data, dict):
                 data = {}
-            raw_calls = data.get("call", [])
-            raw_puts = data.get("put", [])
             if not isinstance(raw_calls, list):
                 raw_calls = []
             if not isinstance(raw_puts, list):
@@ -989,6 +987,7 @@ def api_kotak_options():
                 "source": "Kotak Neo", "underlying": "NATURALGAS",
                 "checked_at_utc": datetime.now(timezone.utc).isoformat(),
                 "options_rows_parsed": parsed_count, "synthetic": False,
+                "schema_validation": schema_check,
                 "diagnostics": {
                     "response_data_keys": sorted(str(k)[:80] for k in data.keys())[:80],
                     "call_row_keys_sample": safe_keys(raw_calls),
