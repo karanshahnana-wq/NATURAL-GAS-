@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from kotak_connection import connection_status, create_authenticated_client
 from candle_engine import start_collector, get_status as candle_status, get_candles
 from x_radar import router as x_radar_router
+from options_schema import extract_option_sides
 
 app = FastAPI(title="MCX Natural Gas Radar", version="0.5.0")
 app.include_router(x_radar_router)
