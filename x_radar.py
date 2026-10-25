@@ -83,9 +83,35 @@ def _rss_items(query: str, label: str):
             "source": source,
             "category": label,
             "kind": "news_article",
+            **score_headline(title),
         })
     return items
 
+
+# Transparent keyword sentiment heuristic. This is a headline tag, not a trading signal.
+_BULLISH_TERMS = {
+    "cold": 1.0, "colder": 1.2, "freeze": 1.2, "freezing": 1.2, "storm": 0.8,
+    "higher demand": 1.0, "demand rises": 1.0, "storage draw": 1.2, "withdrawal": 0.8,
+    "lng exports rise": 1.2, "feedgas rises": 1.0, "production falls": 1.2,
+    "supply outage": 1.0, "pipeline outage": 1.0, "bullish": 1.0, "surge": 0.5,
+}
+_BEARISH_TERMS = {
+    "warm": 1.0, "warmer": 1.2, "mild": 0.8, "storage build": 1.2, "injection": 0.8,
+    "production rises": 1.2, "record production": 1.2, "lng outage": 1.0,
+    "feedgas falls": 1.0, "demand falls": 1.0, "bearish": 1.0, "plunge": 0.5,
+}
+
+def score_headline(title: str) -> dict:
+    text = (title or "").lower()
+    bull_hits = [term for term in _BULLISH_TERMS if term in text]
+    bear_hits = [term for term in _BEARISH_TERMS if term in text]
+    bull = sum(_BULLISH_TERMS[t] for t in bull_hits)
+    bear = sum(_BEARISH_TERMS[t] for t in bear_hits)
+    score = round(bull - bear, 2)
+    tag = "bullish-leaning" if score >= 0.75 else "bearish-leaning" if score <= -0.75 else "mixed/unclear"
+    return {"sentiment_tag": tag, "sentiment_score": score,
+            "bullish_terms": bull_hits, "bearish_terms": bear_hits,
+            "sentiment_method": "transparent keyword heuristic; context may reverse interpretation"}
 
 def _get_news():
     now = monotonic()
@@ -107,6 +133,12 @@ def _get_news():
     result = {
         "status": "connected" if items else "unavailable",
         "items": items[:20],
+        "sentiment_summary": {
+            "bullish_leaning": sum(1 for x in items if x.get("sentiment_tag") == "bullish-leaning"),
+            "bearish_leaning": sum(1 for x in items if x.get("sentiment_tag") == "bearish-leaning"),
+            "mixed_or_unclear": sum(1 for x in items if x.get("sentiment_tag") == "mixed/unclear"),
+            "method": "keyword heuristic; not a standalone trading signal",
+        },
         "checked_at_utc": datetime.now(timezone.utc).isoformat(),
         "source": "Google News public RSS",
         "note": (
