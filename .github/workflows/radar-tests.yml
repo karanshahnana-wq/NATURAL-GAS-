@@ -17,7 +17,7 @@ jobs:
       - name: Install runtime dependencies
         run: python -m pip install -r requirements.txt
       - name: Compile application modules
-        run: python -m compileall -q main.py candle_engine.py kotak_connection.py x_radar.py options_schema.py persistent_store.py
+        run: python -m compileall -q main.py candle_engine.py kotak_connection.py x_radar.py options_schema.py persistent_store.py fundamental_feeds.py
       - name: Run regression tests
         run: python -m unittest discover -s tests -v
 
