@@ -488,20 +488,8 @@ def _factor_assessment(live_quote, drivers):
     add("CFTC positioning and seasonality", "unavailable", 0,
         "Positioning and historical seasonal percentile are not connected; no estimate fabricated", "CFTC / verified historical dataset", False)
 
-    # News sentiment: only timestamped, fresh RSS headlines are scored; heuristic is low-confidence context.
-    news = drivers.get("news", {}) if isinstance(drivers, dict) else {}
-    items = news.get("items", []) if isinstance(news, dict) else []
-    fresh_items = [x for x in items if isinstance(x, dict) and x.get("sentiment_tag")]
-    bull_count = sum(1 for x in fresh_items if x.get("sentiment_tag") == "bullish-leaning")
-    bear_count = sum(1 for x in fresh_items if x.get("sentiment_tag") == "bearish-leaning")
-    if fresh_items:
-        sentiment_dir = "bullish" if bull_count > bear_count else "bearish" if bear_count > bull_count else "neutral"
-        add("Fresh headline sentiment (heuristic)", sentiment_dir, 0.25 if bull_count != bear_count else 0,
-            f"{len(fresh_items)} fresh headlines; {bull_count} bullish-leaning, {bear_count} bearish-leaning. Keyword heuristic only.",
-            "Google News RSS headline keyword tags", True, "low_confidence_context_only")
-    else:
-        add("Fresh headline sentiment (heuristic)", "unavailable", 0,
-            "No parseable fresh headlines with sentiment tags", "Google News RSS", False)
+    # Headlines remain in the separate news panel; the ten-factor framework
+    # reserves factor 10 for verified technical trend rather than double-counting news.
 
     # 10. Technical trend from genuine stored Kotak SFeed candles only.
     try:
