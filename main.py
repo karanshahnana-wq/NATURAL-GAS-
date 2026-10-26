@@ -98,8 +98,8 @@ def get_live_mcx_quote():
         try:
             chain = client.option_chain(exchange="mcx_fo", underlying=underlying, instrument_type="fut")
             data = chain.get("data", chain) if isinstance(chain, dict) else {}
-            futures = data.get("fut", []) if isinstance(data, dict) else []
-            for item in futures if isinstance(futures, list) else []:
+            futures = _unwrap_rows(data, preferred_keys=("fut", "futures"))
+            for item in futures:
                 inst = item.get("inst", {}) if isinstance(item, dict) else {}
                 neo_symbol = inst.get("neoSymbol", "")
                 symbol = inst.get("symbol", "")
@@ -829,8 +829,8 @@ def kotak_mcx_test():
             try:
                 chain = client.option_chain(exchange="mcx_fo", underlying=underlying, instrument_type="fut")
                 data = chain.get("data", chain) if isinstance(chain, dict) else {}
-                futures = data.get("fut", []) if isinstance(data, dict) else []
-                for item in futures if isinstance(futures, list) else []:
+                futures = _unwrap_rows(data, preferred_keys=("fut", "futures"))
+                for item in futures:
                     inst = item.get("inst", {}) if isinstance(item, dict) else {}
                     neo_symbol = inst.get("neoSymbol", "")
                     symbol = inst.get("symbol", "")
@@ -868,9 +868,9 @@ def kotak_mcx_test():
         segment, token = neo_symbol.split("|", 1)
         response = client.quotes(instrument_tokens=[{"instrument_token": token, "exchange_segment": segment}], quote_type="all")
         rows = _unwrap_rows(response, preferred_keys=("quotes", "quote"))
-    quote = rows[0] if rows else {}
-    ltp = _positive_ltp(quote)
-        if not ltp:
+        quote = rows[0] if rows else {}
+        ltp = _positive_ltp(quote)
+        if ltp is None:
             return {"ok": False, "mcx_quote_verified": False, "symbol": symbol or neo_symbol,
                     "message": "Natural Gas contract lookup succeeded, but Kotak did not return an LTP. Live quote access is not yet verified."}
         return {"ok": True, "mcx_quote_verified": True, "symbol": symbol or neo_symbol,
