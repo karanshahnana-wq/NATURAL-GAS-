@@ -112,7 +112,7 @@ def get_live_mcx_quote():
             continue
     if not candidates:
         rows = client.search_scrip(exchange_segment="mcx_fo", symbol="NATURALGAS", expiry="", option_type="FUT", strike_price="")
-        for row in rows if isinstance(rows, list) else []:
+        for row in _unwrap_rows(rows):
             token = row.get("pSymbol")
             symbol = row.get("pTrdSymbol") or row.get("pSymbolName") or ""
             expiry = row.get("pExpiryDate") or row.get("lExpiryDate") or ""
@@ -131,11 +131,9 @@ def get_live_mcx_quote():
     neo_symbol, symbol, expiry = sorted(candidates, key=expiry_key)[0]
     segment, token = neo_symbol.split("|", 1)
     response = client.quotes(instrument_tokens=[{"instrument_token": token, "exchange_segment": segment}], quote_type="all")
-    rows = response if isinstance(response, list) else response.get("data", []) if isinstance(response, dict) else []
-    if isinstance(rows, dict):
-        rows = [rows]
-    quote = rows[0] if rows and isinstance(rows[0], dict) else {}
-    ltp = quote.get("ltp") or quote.get("last_traded_price")
+    rows = _unwrap_rows(response, preferred_keys=("quotes", "quote"))
+    quote = rows[0] if rows else {}
+    ltp = _positive_ltp(quote)
     if ltp is None:
         raise RuntimeError("Kotak did not return a last traded price.")
     def number(value):
@@ -847,7 +845,7 @@ def kotak_mcx_test():
         if not candidates:
             try:
                 rows = client.search_scrip(exchange_segment="mcx_fo", symbol="NATURALGAS", expiry="", option_type="FUT", strike_price="")
-                for row in rows if isinstance(rows, list) else []:
+                for row in _unwrap_rows(rows):
                     token = row.get("pSymbol")
                     symbol = row.get("pTrdSymbol") or row.get("pSymbolName") or ""
                     expiry = row.get("pExpiryDate") or row.get("lExpiryDate") or ""
@@ -869,10 +867,9 @@ def kotak_mcx_test():
         neo_symbol, symbol, expiry = sorted(candidates, key=expiry_key)[0]
         segment, token = neo_symbol.split("|", 1)
         response = client.quotes(instrument_tokens=[{"instrument_token": token, "exchange_segment": segment}], quote_type="all")
-        rows = response if isinstance(response, list) else response.get("data", []) if isinstance(response, dict) else []
-        if isinstance(rows, dict): rows = [rows]
-        quote = rows[0] if rows and isinstance(rows[0], dict) else {}
-        ltp = quote.get("ltp") or quote.get("last_traded_price")
+        rows = _unwrap_rows(response, preferred_keys=("quotes", "quote"))
+    quote = rows[0] if rows else {}
+    ltp = _positive_ltp(quote)
         if not ltp:
             return {"ok": False, "mcx_quote_verified": False, "symbol": symbol or neo_symbol,
                     "message": "Natural Gas contract lookup succeeded, but Kotak did not return an LTP. Live quote access is not yet verified."}
