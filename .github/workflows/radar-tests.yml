@@ -36,3 +36,6 @@ jobs:
           curl --fail --silent --show-error --max-time 20 \
             -X POST "https://natural-gas-radar.onrender.com/api/ingest/refresh" \
             -H "Authorization: Bearer $RADAR_INGEST_TOKEN"
+          curl --fail --silent --show-error --max-time 20 \\
+            -X POST "https://natural-gas-radar.onrender.com/api/fundamental-watch/refresh" \\
+            -H "Authorization: Bearer $RADAR_INGEST_TOKEN"
