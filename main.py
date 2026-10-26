@@ -10,11 +10,13 @@ from fastapi.responses import HTMLResponse
 from kotak_connection import connection_status, create_authenticated_client
 from candle_engine import start_collector, get_status as candle_status, get_candles
 from x_radar import router as x_radar_router
+from fundamental_feeds import router as fundamental_feeds_router
 from options_schema import extract_option_sides
 from persistent_store import get_json as get_persisted_json, put_json as put_persisted_json
 
 app = FastAPI(title="MCX Natural Gas Radar", version="0.5.0")
 app.include_router(x_radar_router)
+app.include_router(fundamental_feeds_router)
 DEMO_MODE = os.getenv("RADAR_DEMO_MODE", "true").lower() == "true"
 _last_kotak_test = 0.0
 _quote_cache = {"checked_at": 0.0, "data": None}
