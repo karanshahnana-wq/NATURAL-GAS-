@@ -40,6 +40,13 @@ python -m unittest discover -s tests -v
 
 The GitHub Actions regression workflow passed on the current main commit as of 16 October 2026. This verifies deterministic tests only, not broker connectivity, production deployment, forecast accuracy, or profitability.
 
+## Fundamental data endpoints
+
+- `GET /api/fundamental-watch` returns timestamped EIA storage observations (requires `EIA_API_KEY`), a best-effort CFTC disaggregated COT snapshot, a NOAA forecast for the Henry Hub area (regional proxy only), and recent public news RSS links. Every feed has its own status; provider errors do not produce substitute values.
+- `POST /api/fundamental-watch/refresh` clears the in-process feed cache and refreshes it. It requires `RADAR_INGEST_TOKEN` in Render and an `Authorization: Bearer <token>` header. Store the same token in GitHub Actions Secrets; never commit it.
+- X post text is **not** collected without authorized X API/feed credentials. The existing `/api/x-radar` provides links and public news RSS, not verified X-post analysis.
+- News RSS and regional weather are context, not national HDD/CDD modelling or trade signals. The COT report is weekly. Storage consensus/surprise remains unavailable unless a verified consensus source is configured.
+
 ## Live data, storage, and backtest verification
 
 See [docs/LIVE_DATA_VERIFICATION.md](docs/LIVE_DATA_VERIFICATION.md) for tick capture, candle regression tests, authorized historical CSV validation, backtest execution with explicit costs/slippage, and persistent storage setup. SQLite WAL does not make an ephemeral host filesystem persistent; configure a mounted persistent disk before depending on history across deploys.

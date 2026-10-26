@@ -10,12 +10,14 @@ from fastapi.responses import HTMLResponse
 from kotak_connection import connection_status, create_authenticated_client
 from candle_engine import start_collector, get_status as candle_status, get_candles
 from x_radar import router as x_radar_router
+from fundamental_feeds import router as fundamental_feeds_router
 from options_schema import extract_option_sides
 from persistent_store import get_json as get_persisted_json, put_json as put_persisted_json
 
 app = FastAPI(title="MCX Natural Gas Radar", version="0.5.0")
 app.include_router(x_radar_router)
-DEMO_MODE = os.getenv("RADAR_DEMO_MODE", "true").lower() == "true"
+app.include_router(fundamental_feeds_router)
+DEMO_MODE = os.getenv("RADAR_DEMO_MODE", "false").lower() == "true"
 _last_kotak_test = 0.0
 _quote_cache = {"checked_at": 0.0, "data": None}
 _QUOTE_CACHE_SECONDS = 20
@@ -24,7 +26,47 @@ _DRIVER_CACHE_SECONDS = 600
 _eia_cache = {"checked_at": 0.0, "data": None}
 _EIA_CACHE_SECONDS = 21600  # EIA weekly storage: refresh at most every 6 hours
 _kotak_client_cache = {"created_at": 0.0, "client": None}
+
 _KOTAK_CLIENT_CACHE_SECONDS = 480
+
+
+def _unwrap_rows(response, preferred_keys=()):
+    """Normalize common Kotak SDK response shapes to a list of row dictionaries."""
+    value = response
+    # SDK versions differ: responses may be a list, {"data": [...]}, or nested wrappers.
+    for _ in range(5):
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if not isinstance(value, dict):
+            return []
+        next_value = None
+        for key in (*preferred_keys, "data", "result", "records", "items", "fut"):
+            candidate = value.get(key)
+            if isinstance(candidate, (list, dict)):
+                next_value = candidate
+                break
+        if next_value is None:
+            # A single quote/instrument object is also a valid one-row response.
+            if any(k in value for k in ("ltp", "last_traded_price", "pSymbol", "neoSymbol", "inst")):
+                return [value]
+            return []
+        value = next_value
+    return []
+
+
+def _positive_ltp(quote):
+    """Read a valid positive last-traded price from known Kotak field aliases."""
+    if not isinstance(quote, dict):
+        return None
+    for key in ("ltp", "last_traded_price", "lastTradedPrice", "last_price", "lastPrice"):
+        value = quote.get(key)
+        try:
+            parsed = float(value) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            parsed = None
+        if parsed is not None and parsed > 0:
+            return parsed
+    return None
 
 PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCX Natural Gas Radar</title><style>
 :root{color-scheme:dark;--bg:#0a1020;--p:#111b2e;--line:#263650;--t:#e8eef8;--m:#9cacc4;--a:#7dd3fc;--g:#34d399;--r:#fb7185;--y:#fbbf24}*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top right,#172b49,#0a1020 48%);color:var(--t);font:15px/1.5 system-ui,Segoe UI,sans-serif}.top{padding:24px max(20px,calc((100vw - 1200px)/2));border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:16px}.eyebrow{font-size:11px;letter-spacing:1.5px;color:var(--a);font-weight:800}h1{font-size:clamp(25px,4vw,38px);margin:5px 0;letter-spacing:-1px}h2{font-size:19px;margin:0 0 12px}p{color:var(--m)}.muted{color:var(--m);font-size:13px}.pill{border:1px solid var(--y);color:var(--y);padding:6px 10px;border-radius:99px;font-size:11px;font-weight:800}button{background:var(--a);color:#07111f;border:0;border-radius:9px;padding:10px 14px;font-weight:800;cursor:pointer}.actions{display:flex;align-items:center;gap:10px}main{max-width:1200px;margin:auto;padding:20px}.notice{background:#2a2110;border:1px solid #8a6720;color:#f9e6b0;padding:12px 15px;border-radius:12px;margin-bottom:16px}.grid{display:grid;grid-template-columns:1.1fr 1fr;gap:15px}.panel{background:linear-gradient(145deg,#111b2e,#0d1729);border:1px solid var(--line);border-radius:16px;padding:20px;min-width:0}.label{font-size:11px;letter-spacing:1.3px;color:var(--a);font-weight:800}.price{font-size:clamp(38px,6vw,58px);font-weight:850;letter-spacing:-2px;margin:8px 0}.change{font-weight:800}.positive{color:var(--g)}.negative{color:var(--r)}.mini{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:20px}.mini div{background:#0a1425;border:1px solid var(--line);border-radius:9px;padding:10px}.mini span{display:block;color:var(--m);font-size:12px}.mini b{display:block;margin-top:5px}.range{height:5px;background:linear-gradient(90deg,var(--r),#64748b,var(--g));border-radius:5px;margin:24px 0 8px;position:relative}.range i{position:absolute;left:50%;top:-4px;width:13px;height:13px;border:3px solid var(--a);background:white;border-radius:50%}.range-labels{display:flex;justify-content:space-between;color:var(--m);font-size:12px}.three{display:grid;grid-template-columns:repeat(3,1fr);gap:15px;margin:15px 0}.value{font-size:18px;font-weight:800;margin:12px 0}.three p{min-height:45px}.foot{border-top:1px solid var(--line);padding-top:10px;color:var(--a);font-size:12px}.levels div,.inputs div{display:flex;justify-content:space-between;gap:10px;padding:11px 0;border-bottom:1px solid var(--line)}.levels div:last-child,.inputs div:last-child{border:0}.levels span,.inputs span{color:var(--m);font-size:12px}.current{background:#18304a;padding-left:8px!important;padding-right:8px!important;border-radius:8px}.readiness .inputs{margin-top:8px}.readiness .inputs b{font-size:12px;text-align:right}.readiness .ok{color:var(--g)}.readiness p{margin-top:18px}.testresult{margin-top:12px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--a);font-size:13px}.footbutton{margin-top:10px}footer{text-align:center;color:var(--m);font-size:12px;padding:22px}@media(max-width:760px){.top{align-items:flex-start;flex-direction:column;padding:20px}.actions{width:100%;justify-content:space-between}main{padding:12px}.grid,.three{grid-template-columns:1fr}.mini{grid-template-columns:repeat(2,1fr)}.panel{padding:16px}.three p{min-height:0}}
@@ -56,8 +98,8 @@ def get_live_mcx_quote():
         try:
             chain = client.option_chain(exchange="mcx_fo", underlying=underlying, instrument_type="fut")
             data = chain.get("data", chain) if isinstance(chain, dict) else {}
-            futures = data.get("fut", []) if isinstance(data, dict) else []
-            for item in futures if isinstance(futures, list) else []:
+            futures = _unwrap_rows(data, preferred_keys=("fut", "futures"))
+            for item in futures:
                 inst = item.get("inst", {}) if isinstance(item, dict) else {}
                 neo_symbol = inst.get("neoSymbol", "")
                 symbol = inst.get("symbol", "")
@@ -70,7 +112,7 @@ def get_live_mcx_quote():
             continue
     if not candidates:
         rows = client.search_scrip(exchange_segment="mcx_fo", symbol="NATURALGAS", expiry="", option_type="FUT", strike_price="")
-        for row in rows if isinstance(rows, list) else []:
+        for row in _unwrap_rows(rows):
             token = row.get("pSymbol")
             symbol = row.get("pTrdSymbol") or row.get("pSymbolName") or ""
             expiry = row.get("pExpiryDate") or row.get("lExpiryDate") or ""
@@ -89,11 +131,9 @@ def get_live_mcx_quote():
     neo_symbol, symbol, expiry = sorted(candidates, key=expiry_key)[0]
     segment, token = neo_symbol.split("|", 1)
     response = client.quotes(instrument_tokens=[{"instrument_token": token, "exchange_segment": segment}], quote_type="all")
-    rows = response if isinstance(response, list) else response.get("data", []) if isinstance(response, dict) else []
-    if isinstance(rows, dict):
-        rows = [rows]
-    quote = rows[0] if rows and isinstance(rows[0], dict) else {}
-    ltp = quote.get("ltp") or quote.get("last_traded_price")
+    rows = _unwrap_rows(response, preferred_keys=("quotes", "quote"))
+    quote = rows[0] if rows else {}
+    ltp = _positive_ltp(quote)
     if ltp is None:
         raise RuntimeError("Kotak did not return a last traded price.")
     def number(value):
@@ -448,20 +488,8 @@ def _factor_assessment(live_quote, drivers):
     add("CFTC positioning and seasonality", "unavailable", 0,
         "Positioning and historical seasonal percentile are not connected; no estimate fabricated", "CFTC / verified historical dataset", False)
 
-    # News sentiment: only timestamped, fresh RSS headlines are scored; heuristic is low-confidence context.
-    news = drivers.get("news", {}) if isinstance(drivers, dict) else {}
-    items = news.get("items", []) if isinstance(news, dict) else []
-    fresh_items = [x for x in items if isinstance(x, dict) and x.get("sentiment_tag")]
-    bull_count = sum(1 for x in fresh_items if x.get("sentiment_tag") == "bullish-leaning")
-    bear_count = sum(1 for x in fresh_items if x.get("sentiment_tag") == "bearish-leaning")
-    if fresh_items:
-        sentiment_dir = "bullish" if bull_count > bear_count else "bearish" if bear_count > bull_count else "neutral"
-        add("Fresh headline sentiment (heuristic)", sentiment_dir, 0.25 if bull_count != bear_count else 0,
-            f"{len(fresh_items)} fresh headlines; {bull_count} bullish-leaning, {bear_count} bearish-leaning. Keyword heuristic only.",
-            "Google News RSS headline keyword tags", True, "low_confidence_context_only")
-    else:
-        add("Fresh headline sentiment (heuristic)", "unavailable", 0,
-            "No parseable fresh headlines with sentiment tags", "Google News RSS", False)
+    # Headlines remain in the separate news panel; the ten-factor framework
+    # reserves factor 10 for verified technical trend rather than double-counting news.
 
     # 10. Technical trend from genuine stored Kotak SFeed candles only.
     try:
@@ -789,8 +817,8 @@ def kotak_mcx_test():
             try:
                 chain = client.option_chain(exchange="mcx_fo", underlying=underlying, instrument_type="fut")
                 data = chain.get("data", chain) if isinstance(chain, dict) else {}
-                futures = data.get("fut", []) if isinstance(data, dict) else []
-                for item in futures if isinstance(futures, list) else []:
+                futures = _unwrap_rows(data, preferred_keys=("fut", "futures"))
+                for item in futures:
                     inst = item.get("inst", {}) if isinstance(item, dict) else {}
                     neo_symbol = inst.get("neoSymbol", "")
                     symbol = inst.get("symbol", "")
@@ -805,7 +833,7 @@ def kotak_mcx_test():
         if not candidates:
             try:
                 rows = client.search_scrip(exchange_segment="mcx_fo", symbol="NATURALGAS", expiry="", option_type="FUT", strike_price="")
-                for row in rows if isinstance(rows, list) else []:
+                for row in _unwrap_rows(rows):
                     token = row.get("pSymbol")
                     symbol = row.get("pTrdSymbol") or row.get("pSymbolName") or ""
                     expiry = row.get("pExpiryDate") or row.get("lExpiryDate") or ""
@@ -827,11 +855,10 @@ def kotak_mcx_test():
         neo_symbol, symbol, expiry = sorted(candidates, key=expiry_key)[0]
         segment, token = neo_symbol.split("|", 1)
         response = client.quotes(instrument_tokens=[{"instrument_token": token, "exchange_segment": segment}], quote_type="all")
-        rows = response if isinstance(response, list) else response.get("data", []) if isinstance(response, dict) else []
-        if isinstance(rows, dict): rows = [rows]
-        quote = rows[0] if rows and isinstance(rows[0], dict) else {}
-        ltp = quote.get("ltp") or quote.get("last_traded_price")
-        if not ltp:
+        rows = _unwrap_rows(response, preferred_keys=("quotes", "quote"))
+        quote = rows[0] if rows else {}
+        ltp = _positive_ltp(quote)
+        if ltp is None:
             return {"ok": False, "mcx_quote_verified": False, "symbol": symbol or neo_symbol,
                     "message": "Natural Gas contract lookup succeeded, but Kotak did not return an LTP. Live quote access is not yet verified."}
         return {"ok": True, "mcx_quote_verified": True, "symbol": symbol or neo_symbol,
